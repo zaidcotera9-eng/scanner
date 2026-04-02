@@ -1,1 +1,85 @@
+# ==============================
+# MENÚ
+# ==============================
+Write-Host "==== SCANNER DE ARCHIVOS ====" -ForegroundColor Cyan
+Write-Host "1. Escanear TODO el disco"
+Write-Host "2. Escanear una ruta específica"
 
+$option = Read-Host "Elige una opción (1 o 2)"
+
+if ($option -eq "1") {
+    $path = "C:\"
+}
+elseif ($option -eq "2") {
+    $path = Read-Host "Ingresa la ruta"
+}
+else {
+    Write-Host "Opción inválida" -ForegroundColor Red
+    exit
+}
+
+# ==============================
+# REGLAS
+# ==============================
+$rules = @(
+    @{ pattern = "inject|WriteProcessMemory|ReadProcessMemory"; score = 3 },
+    @{ pattern = "OpenProcess|CreateRemoteThread"; score = 3 },
+    @{ pattern = "hook|SetWindowsHookEx"; score = 2 },
+    @{ pattern = "bypass|patch|memory"; score = 2 },
+    @{ pattern = "aimbot|wallhack|esp"; score = 4 }
+)
+
+$hackThreshold = 5
+
+# ==============================
+# ESCANEO
+# ==============================
+Write-Host "`nEscaneando: $path ..." -ForegroundColor Yellow
+
+$files = Get-ChildItem -Path $path -Recurse -File -ErrorAction SilentlyContinue
+
+foreach ($file in $files) {
+    try {
+        if ($file.Length -gt 5MB) { continue }
+
+        $content = Get-Content $file.FullName -Raw -ErrorAction Stop
+
+        $hackScore = 0
+        $matchedStrings = @()
+
+        foreach ($rule in $rules) {
+            $matches = [regex]::Matches($content, $rule.pattern, "IgnoreCase")
+
+            if ($matches.Count -gt 0) {
+                $hackScore += $rule.score
+
+                foreach ($m in $matches) {
+                    if ($matchedStrings -notcontains $m.Value) {
+                        $matchedStrings += $m.Value
+                    }
+                }
+            }
+        }
+
+        # SOLO mostrar si es hack confirmado
+        if ($hackScore -ge $hackThreshold) {
+
+            Write-Host "`n==============================" -ForegroundColor DarkRed
+            Write-Host "[HACK CONFIRMADO] $($file.FullName)" -ForegroundColor Red
+            Write-Host "Score: $hackScore" -ForegroundColor Red
+
+            Write-Host "Strings detectadas:" -ForegroundColor Magenta
+
+            foreach ($str in $matchedStrings) {
+                Write-Host " - $str" -ForegroundColor Yellow
+            }
+
+            Write-Host "==============================`n" -ForegroundColor DarkRed
+        }
+
+    } catch {
+        # ignorar errores
+    }
+}
+
+Write-Host "`nEscaneo finalizado." -ForegroundColor Cyan
