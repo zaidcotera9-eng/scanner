@@ -1,8 +1,7 @@
-# Requiere PowerShell 7+ para ForEach-Object -Parallel
+# =========================================
+# ⚙️ CONFIGURACIÓN
+# =========================================
 
-# ==============================
-# CONFIG
-# ==============================
 $excludePaths = @(
     "C:\Windows",
     "C:\Program Files",
@@ -10,67 +9,85 @@ $excludePaths = @(
     "C:\ProgramData"
 )
 
-$validExtensions = @(".jar",".txt",".log",".ps1",".java",".js",".json",".cfg")
+$validExtensions = @(".jar",".txt",".log",".cfg",".json",".js",".java")
 
-$hackRules = @(
-    "killaura","aimbot","reach","velocity","antiknockback",
-    "esp","xray","wallhack",
-    "sendpacket","bypass","disabler",
-    "modulemanager","eventbus",
-    "liquidbounce","wurst","meteorclient","aristois"
+# 🎯 Strings reales de cheats Minecraft
+$hackStrings = @(
+    "killaura","aimbot","triggerbot","reach","velocity",
+    "antiknockback","autoclick","autoclicker",
+    "aimassist","hitbox","esp","wallhack","xray",
+    "fastplace","fastbreak","nofall","fly","bhop",
+    "timerhack","scaffold","autosoup",
+    "liquidbounce","wurst","meteorclient","aristois",
+    "inject","bypass","disabler","sendpacket"
 )
 
-# ==============================
-# MENÚ
-# ==============================
-Write-Host "==== SCANNER PRO ====" -ForegroundColor Cyan
-Write-Host "1. Todo el disco"
-Write-Host "2. Ruta específica"
+# mínimo de coincidencias para marcar hack
+$threshold = 2
 
-$opt = Read-Host "Opción"
+# =========================================
+# 📋 MENÚ
+# =========================================
+
+Write-Host "==== MINECRAFT ANTI-CHEAT SCANNER ====" -ForegroundColor Cyan
+Write-Host "1. Escanear todo el disco"
+Write-Host "2. Escanear ruta específica"
+
+$opt = Read-Host "Elige opción"
 
 if ($opt -eq "1") {
     $path = "C:\"
-} elseif ($opt -eq "2") {
-    $path = Read-Host "Ruta"
-} else { exit }
+}
+elseif ($opt -eq "2") {
+    $path = Read-Host "Ingresa la ruta"
+}
+else {
+    Write-Host "Opción inválida" -ForegroundColor Red
+    exit
+}
 
-# ==============================
-# TIEMPO
-# ==============================
+# =========================================
+# ⏱️ TIEMPO
+# =========================================
+
 $start = Get-Date
 
-# ==============================
-# FUNCIÓN ANALIZAR JAR
-# ==============================
+# =========================================
+# 📦 FUNCIÓN ANALIZAR JAR
+# =========================================
+
 function Analyze-Jar($filePath) {
     try {
         Add-Type -AssemblyName System.IO.Compression.FileSystem
-
         $zip = [System.IO.Compression.ZipFile]::OpenRead($filePath)
+
         $found = @()
 
         foreach ($entry in $zip.Entries) {
 
+            # evitar archivos grandes
             if ($entry.Length -gt 2MB) { continue }
 
             $stream = $entry.Open()
             $reader = New-Object System.IO.StreamReader($stream)
 
-            $content = $reader.ReadToEnd()
+            try {
+                $content = $reader.ReadToEnd()
 
-            foreach ($rule in $hackRules) {
-                if ($content -match $rule) {
-                    $found += $rule
+                foreach ($str in $hackStrings) {
+                    if ($content -match $str) {
+                        $found += $str
+                    }
                 }
-            }
+
+            } catch {}
 
             $reader.Close()
         }
 
         $zip.Dispose()
 
-        if ($found.Count -ge 2) {
+        if ($found.Count -ge $threshold) {
             return $found | Sort-Object -Unique
         }
 
@@ -79,59 +96,67 @@ function Analyze-Jar($filePath) {
     return $null
 }
 
-# ==============================
-# ESCANEO PARALELO ⚡
-# ==============================
-Write-Host "`nEscaneando rápido..." -ForegroundColor Yellow
+# =========================================
+# 🔍 ESCANEO
+# =========================================
 
-$files = Get-ChildItem -Path $path -Recurse -File -ErrorAction SilentlyContinue
+Write-Host "`nEscaneando..." -ForegroundColor Yellow
 
-$files | ForEach-Object -Parallel {
+Get-ChildItem -Path $path -Recurse -File -ErrorAction SilentlyContinue | ForEach-Object {
 
     $file = $_
 
-    # excluir sistema
-    foreach ($ex in $using:excludePaths) {
+    # 🚫 evitar sistema
+    foreach ($ex in $excludePaths) {
         if ($file.FullName.StartsWith($ex)) { return }
     }
 
     if ($file.Attributes -match "System") { return }
 
-    if ($using:validExtensions -notcontains $file.Extension) { return }
+    if ($validExtensions -notcontains $file.Extension) { return }
 
     try {
-        # ==========================
-        # JAR ANALYSIS
-        # ==========================
+
+        # =========================
+        # 📦 JAR
+        # =========================
         if ($file.Extension -eq ".jar") {
 
             $result = Analyze-Jar $file.FullName
 
             if ($result) {
-                Write-Host "`n[HACK JAR] $($file.FullName)" -ForegroundColor Red
+                Write-Host "`n[HACK DETECTADO - JAR]" -ForegroundColor Red
+                Write-Host $file.FullName -ForegroundColor DarkRed
+
+                Write-Host "Strings detectadas:" -ForegroundColor Magenta
                 foreach ($r in $result) {
-                    Write-Host " - $r" -ForegroundColor Magenta
+                    Write-Host " - $r" -ForegroundColor Yellow
                 }
             }
 
         }
         else {
-            # ==========================
-            # ARCHIVOS NORMALES
-            # ==========================
+
+            # =========================
+            # 📄 ARCHIVOS NORMALES
+            # =========================
+
             if ($file.Length -gt 3MB) { return }
 
             $content = Get-Content $file.FullName -Raw -ErrorAction Stop
             $found = @()
 
-            foreach ($rule in $using:hackRules) {
-                if ($content -match $rule) {
-                    $found += $rule
+            foreach ($str in $hackStrings) {
+                if ($content -match $str) {
+                    $found += $str
                 }
             }
 
-            if ($found.Count -ge 2) {
-                Write-Host "`n[HACK] $($file.FullName)" -ForegroundColor Red
+            if ($found.Count -ge $threshold) {
+                Write-Host "`n[HACK DETECTADO]" -ForegroundColor Red
+                Write-Host $file.FullName -ForegroundColor DarkRed
+
+                Write-Host "Strings detectadas:" -ForegroundColor Magenta
                 $found | Sort-Object -Unique | ForEach-Object {
                     Write-Host " - $_" -ForegroundColor Yellow
                 }
@@ -140,11 +165,12 @@ $files | ForEach-Object -Parallel {
 
     } catch {}
 
-} -ThrottleLimit 8   # 🔥 puedes subir a 12 si tienes buen PC
+}
 
-# ==============================
-# TIEMPO FINAL
-# ==============================
+# =========================================
+# ⏱️ RESULTADO FINAL
+# =========================================
+
 $end = Get-Date
 $time = $end - $start
 
