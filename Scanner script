@@ -1,55 +1,73 @@
 # ==============================
-# MENÚ
+# MENÚ PRINCIPAL
 # ==============================
-Write-Host "==== SCANNER DE ARCHIVOS ====" -ForegroundColor Cyan
-Write-Host "1. Escanear TODO el disco"
-Write-Host "2. Escanear una ruta específica"
+Write-Host "==== SCANNER AVANZADO ====" -ForegroundColor Cyan
+Write-Host "1. Detectar Unicode"
+Write-Host "2. Detectar Hacks Minecraft"
+Write-Host "3. Detectar Autoclickers"
+Write-Host "4. Escaneo Completo + Verificación Online"
 
-$option = Read-Host "Elige una opción (1 o 2)"
+$mode = Read-Host "Elige una opción (1-4)"
 
-if ($option -eq "1") {
+# ==============================
+# RUTA
+# ==============================
+Write-Host "`n1. Todo el disco"
+Write-Host "2. Ruta específica"
+$opt = Read-Host "Selecciona"
+
+if ($opt -eq "1") {
     $path = "C:\"
 }
-elseif ($option -eq "2") {
-    $path = Read-Host "Ingresa la ruta"
+elseif ($opt -eq "2") {
+    $path = Read-Host "Ruta"
 }
 else {
-    Write-Host "Opción inválida" -ForegroundColor Red
+    Write-Host "Error" -ForegroundColor Red
     exit
 }
 
 # ==============================
-# REGLAS (Minecraft Cheats)
+# CRONÓMETRO
 # ==============================
-$rules = @(
-    # Combate
-    @{ pattern = "killaura|aimbot|triggerbot|reach|velocity|antiknockback|criticals|hitbox"; score = 4 },
+$startTime = Get-Date
 
-    # Movimiento
-    @{ pattern = "fly|speed|bhop|longjump|step|nofall|fastladder|jesus|glide"; score = 3 },
+# ==============================
+# REGLAS
+# ==============================
 
-    # Visual
-    @{ pattern = "esp|wallhack|tracers|chams|nametags|xray|fullbright"; score = 3 },
+$unicodeRegex = "[^\x00-\x7F]"
 
-    # Interno (MUY fuerte)
-    @{ pattern = "modulemanager|modmanager|togglemodule|setenabled|onupdate|onenable|ondisable|eventbus|packetlistener"; score = 4 },
-
-    # Red / bypass
-    @{ pattern = "packet|sendpacket|cancelpacket|blink|disabler|anticheat|bypass|spoof"; score = 4 },
-
-    # Autoclicker (más débil, necesita combo)
-    @{ pattern = "cps|leftclick|rightclick|clickdelay|randomize|jitter|butterfly|dragclick"; score = 2 },
-
-    # Clientes conocidos (MUY fuerte 🔥)
-    @{ pattern = "liquidbounce|wurst|meteorclient|impactclient|aristois|fluxclient|novoline|tenacity|riseclient"; score = 5 }
+$hackRules = @(
+    "killaura","aimbot","reach","velocity","antiknockback",
+    "esp","xray","wallhack",
+    "packet","sendpacket","bypass","disabler",
+    "modulemanager","eventbus",
+    "liquidbounce","wurst","meteorclient","aristois"
 )
 
-$hackThreshold = 6
+$autoRules = @(
+    "cps","clickdelay","butterfly","dragclick",
+    "SendInput","mouse_event","GetAsyncKeyState"
+)
+
+# ==============================
+# FUNCIÓN VERIFICACIÓN ONLINE
+# ==============================
+function Check-Online($text) {
+    try {
+        # Simulación simple (puedes conectar APIs reales aquí)
+        if ($text -match "cheat|hack|inject") {
+            return $true
+        }
+    } catch {}
+    return $false
+}
 
 # ==============================
 # ESCANEO
 # ==============================
-Write-Host "`nEscaneando: $path ..." -ForegroundColor Yellow
+Write-Host "`nEscaneando..." -ForegroundColor Yellow
 
 $files = Get-ChildItem -Path $path -Recurse -File -ErrorAction SilentlyContinue
 
@@ -59,42 +77,63 @@ foreach ($file in $files) {
 
         $content = Get-Content $file.FullName -Raw -ErrorAction Stop
 
-        $hackScore = 0
-        $matchedStrings = @()
+        $found = @()
 
-        foreach ($rule in $rules) {
-            $matches = [regex]::Matches($content, $rule.pattern, "IgnoreCase")
+        switch ($mode) {
 
-            if ($matches.Count -gt 0) {
-                $hackScore += $rule.score
+            "1" {
+                if ($content -match $unicodeRegex) {
+                    Write-Host "[UNICODE] $($file.FullName)" -ForegroundColor Yellow
+                }
+            }
 
-                foreach ($m in $matches) {
-                    if ($matchedStrings -notcontains $m.Value) {
-                        $matchedStrings += $m.Value
+            "2" {
+                foreach ($w in $hackRules) {
+                    if ($content -match $w) { $found += $w }
+                }
+
+                if ($found.Count -ge 2) {
+                    Write-Host "`n[HACK] $($file.FullName)" -ForegroundColor Red
+                    $found | Sort-Object -Unique | ForEach-Object {
+                        Write-Host " - $_" -ForegroundColor Magenta
+                    }
+                }
+            }
+
+            "3" {
+                foreach ($w in $autoRules) {
+                    if ($content -match $w) { $found += $w }
+                }
+
+                if ($found.Count -ge 2) {
+                    Write-Host "`n[AUTOCLICK] $($file.FullName)" -ForegroundColor Red
+                    $found | Sort-Object -Unique | ForEach-Object {
+                        Write-Host " - $_" -ForegroundColor Magenta
+                    }
+                }
+            }
+
+            "4" {
+                foreach ($w in $hackRules + $autoRules) {
+                    if ($content -match $w) { $found += $w }
+                }
+
+                if ($found.Count -ge 3 -and (Check-Online ($content.Substring(0, [Math]::Min(500, $content.Length))))) {
+                    Write-Host "`n[POSIBLE MALICIOSO] $($file.FullName)" -ForegroundColor Red
+                    $found | Sort-Object -Unique | ForEach-Object {
+                        Write-Host " - $_" -ForegroundColor Yellow
                     }
                 }
             }
         }
 
-        # SOLO mostrar si es hack confirmado
-        if ($hackScore -ge $hackThreshold) {
-
-            Write-Host "`n==============================" -ForegroundColor DarkRed
-            Write-Host "[HACK CONFIRMADO] $($file.FullName)" -ForegroundColor Red
-            Write-Host "Score: $hackScore" -ForegroundColor Red
-
-            Write-Host "Strings detectadas:" -ForegroundColor Magenta
-
-            foreach ($str in $matchedStrings) {
-                Write-Host " - $str" -ForegroundColor Yellow
-            }
-
-            Write-Host "==============================`n" -ForegroundColor DarkRed
-        }
-
-    } catch {
-        # ignorar errores
-    }
+    } catch {}
 }
 
-Write-Host "`nEscaneo finalizado." -ForegroundColor Cyan
+# ==============================
+# TIEMPO TOTAL
+# ==============================
+$endTime = Get-Date
+$duration = $endTime - $startTime
+
+Write-Host "`nTiempo total: $($duration.ToString())" -ForegroundColor Cyan
