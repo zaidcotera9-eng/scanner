@@ -19,17 +19,32 @@ else {
 }
 
 # ==============================
-# REGLAS
+# REGLAS (Minecraft Cheats)
 # ==============================
 $rules = @(
-    @{ pattern = "inject|WriteProcessMemory|ReadProcessMemory"; score = 3 },
-    @{ pattern = "OpenProcess|CreateRemoteThread"; score = 3 },
-    @{ pattern = "hook|SetWindowsHookEx"; score = 2 },
-    @{ pattern = "bypass|patch|memory"; score = 2 },
-    @{ pattern = "aimbot|wallhack|esp"; score = 4 }
+    # Combate
+    @{ pattern = "killaura|aimbot|triggerbot|reach|velocity|antiknockback|criticals|hitbox"; score = 4 },
+
+    # Movimiento
+    @{ pattern = "fly|speed|bhop|longjump|step|nofall|fastladder|jesus|glide"; score = 3 },
+
+    # Visual
+    @{ pattern = "esp|wallhack|tracers|chams|nametags|xray|fullbright"; score = 3 },
+
+    # Interno (MUY fuerte)
+    @{ pattern = "modulemanager|modmanager|togglemodule|setenabled|onupdate|onenable|ondisable|eventbus|packetlistener"; score = 4 },
+
+    # Red / bypass
+    @{ pattern = "packet|sendpacket|cancelpacket|blink|disabler|anticheat|bypass|spoof"; score = 4 },
+
+    # Autoclicker (más débil, necesita combo)
+    @{ pattern = "cps|leftclick|rightclick|clickdelay|randomize|jitter|butterfly|dragclick"; score = 2 },
+
+    # Clientes conocidos (MUY fuerte 🔥)
+    @{ pattern = "liquidbounce|wurst|meteorclient|impactclient|aristois|fluxclient|novoline|tenacity|riseclient"; score = 5 }
 )
 
-$hackThreshold = 5
+$hackThreshold = 6
 
 # ==============================
 # ESCANEO
