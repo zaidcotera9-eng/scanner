@@ -1,48 +1,51 @@
 # =========================================
-# ⚙️ CONFIGURACIÓN
+# ⚙️ CONFIG
 # =========================================
 
 $excludePaths = @(
     "C:\Windows",
     "C:\Program Files",
     "C:\Program Files (x86)",
-    "C:\ProgramData"
+    "C:\ProgramData",
+    "$env:LOCALAPPDATA\Microsoft",
+    "$env:APPDATA\Microsoft"
 )
 
 $validExtensions = @(".jar",".txt",".log",".cfg",".json",".js",".java")
 
-# 🎯 Strings reales de cheats Minecraft
+# 🎯 STRINGS REALES Y FIABLES (cheats Minecraft + clickers)
 $hackStrings = @(
     "killaura","aimbot","triggerbot","reach","velocity",
     "antiknockback","autoclick","autoclicker",
     "aimassist","hitbox","esp","wallhack","xray",
     "fastplace","fastbreak","nofall","fly","bhop",
-    "timerhack","scaffold","autosoup",
+    "scaffold","timerhack","autosoup",
     "liquidbounce","wurst","meteorclient","aristois",
-    "inject","bypass","disabler","sendpacket"
+    "clickdelay","cps","leftclick","rightclick"
 )
 
-# mínimo de coincidencias para marcar hack
 $threshold = 2
+
+# Regex Unicode útil (UTF-16 strings largas)
+$unicodeRegex = '(?:[ -~]\x00){6,}'
 
 # =========================================
 # 📋 MENÚ
 # =========================================
 
-Write-Host "==== MINECRAFT ANTI-CHEAT SCANNER ====" -ForegroundColor Cyan
+Write-Host "==== MINECRAFT SCANNER PRO ====" -ForegroundColor Cyan
 Write-Host "1. Escanear todo el disco"
 Write-Host "2. Escanear ruta específica"
 
-$opt = Read-Host "Elige opción"
+$opt = Read-Host "Opción"
 
 if ($opt -eq "1") {
     $path = "C:\"
 }
 elseif ($opt -eq "2") {
-    $path = Read-Host "Ingresa la ruta"
+    $path = Read-Host "Ruta"
 }
 else {
-    Write-Host "Opción inválida" -ForegroundColor Red
     exit
 }
 
@@ -53,7 +56,7 @@ else {
 $start = Get-Date
 
 # =========================================
-# 📦 FUNCIÓN ANALIZAR JAR
+# 📦 ANALIZAR JAR
 # =========================================
 
 function Analyze-Jar($filePath) {
@@ -65,7 +68,6 @@ function Analyze-Jar($filePath) {
 
         foreach ($entry in $zip.Entries) {
 
-            # evitar archivos grandes
             if ($entry.Length -gt 2MB) { continue }
 
             $stream = $entry.Open()
@@ -74,9 +76,13 @@ function Analyze-Jar($filePath) {
             try {
                 $content = $reader.ReadToEnd()
 
-                foreach ($str in $hackStrings) {
-                    if ($content -match $str) {
-                        $found += $str
+                # detectar unicode primero
+                if ($content -match $unicodeRegex) {
+
+                    foreach ($str in $hackStrings) {
+                        if ($content -match $str) {
+                            $found += $str
+                        }
                     }
                 }
 
@@ -106,7 +112,7 @@ Get-ChildItem -Path $path -Recurse -File -ErrorAction SilentlyContinue | ForEach
 
     $file = $_
 
-    # 🚫 evitar sistema
+    # 🚫 EXCLUIR SISTEMA TOTALMENTE
     foreach ($ex in $excludePaths) {
         if ($file.FullName.StartsWith($ex)) { return }
     }
@@ -125,12 +131,12 @@ Get-ChildItem -Path $path -Recurse -File -ErrorAction SilentlyContinue | ForEach
             $result = Analyze-Jar $file.FullName
 
             if ($result) {
-                Write-Host "`n[HACK DETECTADO - JAR]" -ForegroundColor Red
+                Write-Host "`n[HACK JAR]" -ForegroundColor Red
                 Write-Host $file.FullName -ForegroundColor DarkRed
 
                 Write-Host "Strings detectadas:" -ForegroundColor Magenta
-                foreach ($r in $result) {
-                    Write-Host " - $r" -ForegroundColor Yellow
+                $result | ForEach-Object {
+                    Write-Host " - $_" -ForegroundColor Yellow
                 }
             }
 
@@ -144,6 +150,10 @@ Get-ChildItem -Path $path -Recurse -File -ErrorAction SilentlyContinue | ForEach
             if ($file.Length -gt 3MB) { return }
 
             $content = Get-Content $file.FullName -Raw -ErrorAction Stop
+
+            # solo analizar si hay unicode real
+            if ($content -notmatch $unicodeRegex) { return }
+
             $found = @()
 
             foreach ($str in $hackStrings) {
@@ -153,7 +163,7 @@ Get-ChildItem -Path $path -Recurse -File -ErrorAction SilentlyContinue | ForEach
             }
 
             if ($found.Count -ge $threshold) {
-                Write-Host "`n[HACK DETECTADO]" -ForegroundColor Red
+                Write-Host "`n[HACK]" -ForegroundColor Red
                 Write-Host $file.FullName -ForegroundColor DarkRed
 
                 Write-Host "Strings detectadas:" -ForegroundColor Magenta
@@ -168,7 +178,7 @@ Get-ChildItem -Path $path -Recurse -File -ErrorAction SilentlyContinue | ForEach
 }
 
 # =========================================
-# ⏱️ RESULTADO FINAL
+# ⏱️ FINAL
 # =========================================
 
 $end = Get-Date
