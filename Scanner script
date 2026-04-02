@@ -1,139 +1,151 @@
-# ==============================
-# MENÚ PRINCIPAL
-# ==============================
-Write-Host "==== SCANNER AVANZADO ====" -ForegroundColor Cyan
-Write-Host "1. Detectar Unicode"
-Write-Host "2. Detectar Hacks Minecraft"
-Write-Host "3. Detectar Autoclickers"
-Write-Host "4. Escaneo Completo + Verificación Online"
-
-$mode = Read-Host "Elige una opción (1-4)"
+# Requiere PowerShell 7+ para ForEach-Object -Parallel
 
 # ==============================
-# RUTA
+# CONFIG
 # ==============================
-Write-Host "`n1. Todo el disco"
-Write-Host "2. Ruta específica"
-$opt = Read-Host "Selecciona"
+$excludePaths = @(
+    "C:\Windows",
+    "C:\Program Files",
+    "C:\Program Files (x86)",
+    "C:\ProgramData"
+)
 
-if ($opt -eq "1") {
-    $path = "C:\"
-}
-elseif ($opt -eq "2") {
-    $path = Read-Host "Ruta"
-}
-else {
-    Write-Host "Error" -ForegroundColor Red
-    exit
-}
-
-# ==============================
-# CRONÓMETRO
-# ==============================
-$startTime = Get-Date
-
-# ==============================
-# REGLAS
-# ==============================
-
-$unicodeRegex = "[^\x00-\x7F]"
+$validExtensions = @(".jar",".txt",".log",".ps1",".java",".js",".json",".cfg")
 
 $hackRules = @(
     "killaura","aimbot","reach","velocity","antiknockback",
     "esp","xray","wallhack",
-    "packet","sendpacket","bypass","disabler",
+    "sendpacket","bypass","disabler",
     "modulemanager","eventbus",
     "liquidbounce","wurst","meteorclient","aristois"
 )
 
-$autoRules = @(
-    "cps","clickdelay","butterfly","dragclick",
-    "SendInput","mouse_event","GetAsyncKeyState"
-)
+# ==============================
+# MENÚ
+# ==============================
+Write-Host "==== SCANNER PRO ====" -ForegroundColor Cyan
+Write-Host "1. Todo el disco"
+Write-Host "2. Ruta específica"
+
+$opt = Read-Host "Opción"
+
+if ($opt -eq "1") {
+    $path = "C:\"
+} elseif ($opt -eq "2") {
+    $path = Read-Host "Ruta"
+} else { exit }
 
 # ==============================
-# FUNCIÓN VERIFICACIÓN ONLINE
+# TIEMPO
 # ==============================
-function Check-Online($text) {
+$start = Get-Date
+
+# ==============================
+# FUNCIÓN ANALIZAR JAR
+# ==============================
+function Analyze-Jar($filePath) {
     try {
-        # Simulación simple (puedes conectar APIs reales aquí)
-        if ($text -match "cheat|hack|inject") {
-            return $true
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+
+        $zip = [System.IO.Compression.ZipFile]::OpenRead($filePath)
+        $found = @()
+
+        foreach ($entry in $zip.Entries) {
+
+            if ($entry.Length -gt 2MB) { continue }
+
+            $stream = $entry.Open()
+            $reader = New-Object System.IO.StreamReader($stream)
+
+            $content = $reader.ReadToEnd()
+
+            foreach ($rule in $hackRules) {
+                if ($content -match $rule) {
+                    $found += $rule
+                }
+            }
+
+            $reader.Close()
         }
+
+        $zip.Dispose()
+
+        if ($found.Count -ge 2) {
+            return $found | Sort-Object -Unique
+        }
+
     } catch {}
-    return $false
+
+    return $null
 }
 
 # ==============================
-# ESCANEO
+# ESCANEO PARALELO ⚡
 # ==============================
-Write-Host "`nEscaneando..." -ForegroundColor Yellow
+Write-Host "`nEscaneando rápido..." -ForegroundColor Yellow
 
 $files = Get-ChildItem -Path $path -Recurse -File -ErrorAction SilentlyContinue
 
-foreach ($file in $files) {
+$files | ForEach-Object -Parallel {
+
+    $file = $_
+
+    # excluir sistema
+    foreach ($ex in $using:excludePaths) {
+        if ($file.FullName.StartsWith($ex)) { return }
+    }
+
+    if ($file.Attributes -match "System") { return }
+
+    if ($using:validExtensions -notcontains $file.Extension) { return }
+
     try {
-        if ($file.Length -gt 5MB) { continue }
+        # ==========================
+        # JAR ANALYSIS
+        # ==========================
+        if ($file.Extension -eq ".jar") {
 
-        $content = Get-Content $file.FullName -Raw -ErrorAction Stop
+            $result = Analyze-Jar $file.FullName
 
-        $found = @()
-
-        switch ($mode) {
-
-            "1" {
-                if ($content -match $unicodeRegex) {
-                    Write-Host "[UNICODE] $($file.FullName)" -ForegroundColor Yellow
+            if ($result) {
+                Write-Host "`n[HACK JAR] $($file.FullName)" -ForegroundColor Red
+                foreach ($r in $result) {
+                    Write-Host " - $r" -ForegroundColor Magenta
                 }
             }
 
-            "2" {
-                foreach ($w in $hackRules) {
-                    if ($content -match $w) { $found += $w }
-                }
+        }
+        else {
+            # ==========================
+            # ARCHIVOS NORMALES
+            # ==========================
+            if ($file.Length -gt 3MB) { return }
 
-                if ($found.Count -ge 2) {
-                    Write-Host "`n[HACK] $($file.FullName)" -ForegroundColor Red
-                    $found | Sort-Object -Unique | ForEach-Object {
-                        Write-Host " - $_" -ForegroundColor Magenta
-                    }
-                }
-            }
+            $content = Get-Content $file.FullName -Raw -ErrorAction Stop
+            $found = @()
 
-            "3" {
-                foreach ($w in $autoRules) {
-                    if ($content -match $w) { $found += $w }
-                }
-
-                if ($found.Count -ge 2) {
-                    Write-Host "`n[AUTOCLICK] $($file.FullName)" -ForegroundColor Red
-                    $found | Sort-Object -Unique | ForEach-Object {
-                        Write-Host " - $_" -ForegroundColor Magenta
-                    }
+            foreach ($rule in $using:hackRules) {
+                if ($content -match $rule) {
+                    $found += $rule
                 }
             }
 
-            "4" {
-                foreach ($w in $hackRules + $autoRules) {
-                    if ($content -match $w) { $found += $w }
-                }
-
-                if ($found.Count -ge 3 -and (Check-Online ($content.Substring(0, [Math]::Min(500, $content.Length))))) {
-                    Write-Host "`n[POSIBLE MALICIOSO] $($file.FullName)" -ForegroundColor Red
-                    $found | Sort-Object -Unique | ForEach-Object {
-                        Write-Host " - $_" -ForegroundColor Yellow
-                    }
+            if ($found.Count -ge 2) {
+                Write-Host "`n[HACK] $($file.FullName)" -ForegroundColor Red
+                $found | Sort-Object -Unique | ForEach-Object {
+                    Write-Host " - $_" -ForegroundColor Yellow
                 }
             }
         }
 
     } catch {}
-}
+
+} -ThrottleLimit 8   # 🔥 puedes subir a 12 si tienes buen PC
 
 # ==============================
-# TIEMPO TOTAL
+# TIEMPO FINAL
 # ==============================
-$endTime = Get-Date
-$duration = $endTime - $startTime
+$end = Get-Date
+$time = $end - $start
 
-Write-Host "`nTiempo total: $($duration.ToString())" -ForegroundColor Cyan
+Write-Host "`nTiempo total: $($time.ToString())" -ForegroundColor Cyan
