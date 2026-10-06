@@ -1,187 +1,261 @@
-# =========================================
-# ⚙️ CONFIG
-# =========================================
+--[[
+=====================================================================
+ SISTEMA DE ROBO + "AUTO ROBAR" (para TU juego en Roblox Studio)
+=====================================================================
+ Preparación en el Workspace:
+  - Crea una carpeta "Bases" con un Model por jugador (Base1, Base2...).
+  - Dentro de cada Model pon:
+      * Varias Parts que serán los pedestales (en Properties > Tags
+        agrégales la etiqueta "Pedestal" con la ventana Tag Editor).
+      * Una Part llamada "ZonaDeposito" (donde se dejan los objetos robados).
+  - Cada pedestal usa el atributo "Item" (texto). Vacío = libre.
 
-$excludePaths = @(
-    "C:\Windows",
-    "C:\Program Files",
-    "C:\Program Files (x86)",
-    "C:\ProgramData",
-    "$env:LOCALAPPDATA\Microsoft",
-    "$env:APPDATA\Microsoft"
-)
+ Scripts:
+  1) Script      "RobarServidor"  -> ServerScriptService
+  2) LocalScript "RobarCliente"   -> StarterGui
+=====================================================================
+]]
 
-$validExtensions = @(".jar",".txt",".log",".cfg",".json",".js",".java")
 
-# 🎯 STRINGS REALES Y FIABLES (cheats Minecraft + clickers)
-$hackStrings = @(
-    "killaura","aimbot","triggerbot","reach","velocity",
-    "antiknockback","autoclick","autoclicker",
-    "aimassist","hitbox","esp","wallhack","xray",
-    "fastplace","fastbreak","nofall","fly","bhop",
-    "scaffold","timerhack","autosoup",
-    "liquidbounce","wurst","meteorclient","aristois",
-    "clickdelay","cps","leftclick","rightclick"
-)
+--====================================================================
+-- 1) Script "RobarServidor"  (ServerScriptService)
+--====================================================================
+local Players = game:GetService("Players")
+local CollectionService = game:GetService("CollectionService")
+local MarketplaceService = game:GetService("MarketplaceService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
-$threshold = 2
+local GAMEPASS_ID = 0   -- ID de tu gamepass "Auto Robar" (0 = libre para pruebas)
+local RANGO = 15        -- distancia máxima para robar (studs)
+local COOLDOWN = 3      -- segundos entre robos
 
-# Regex Unicode útil (UTF-16 strings largas)
-$unicodeRegex = '(?:[ -~]\x00){6,}'
+-- Remotos
+local remotos = Instance.new("Folder")
+remotos.Name = "RobarRemotos"
+remotos.Parent = ReplicatedStorage
+local autoRobarEvento = Instance.new("RemoteEvent")
+autoRobarEvento.Name = "AutoRobar"
+autoRobarEvento.Parent = remotos
+local alertaEvento = Instance.new("RemoteEvent")
+alertaEvento.Name = "Alerta"
+alertaEvento.Parent = remotos
 
-# =========================================
-# 📋 MENÚ
-# =========================================
+-- Asignar una base libre a cada jugador
+local function asignarBase(jugador)
+	local bases = workspace:WaitForChild("Bases")
+	for _, base in ipairs(bases:GetChildren()) do
+		if base:GetAttribute("Dueno") == jugador.UserId then return end
+	end
+	for _, base in ipairs(bases:GetChildren()) do
+		if not base:GetAttribute("Dueno") then
+			base:SetAttribute("Dueno", jugador.UserId)
+			break
+		end
+	end
+end
 
-Write-Host "==== MINECRAFT SCANNER PRO ====" -ForegroundColor Cyan
-Write-Host "1. Escanear todo el disco"
-Write-Host "2. Escanear ruta específica"
+Players.PlayerAdded:Connect(asignarBase)
+-- En Studio el jugador puede entrar antes de que el script conecte el evento
+for _, jugador in ipairs(Players:GetPlayers()) do
+	task.spawn(asignarBase, jugador)
+end
 
-$opt = Read-Host "Opción"
+Players.PlayerRemoving:Connect(function(jugador)
+	for _, base in ipairs(workspace.Bases:GetChildren()) do
+		if base:GetAttribute("Dueno") == jugador.UserId then
+			base:SetAttribute("Dueno", nil)
+			for _, ped in ipairs(base:GetDescendants()) do
+				if CollectionService:HasTag(ped, "Pedestal") then
+					ped:SetAttribute("Item", "")
+				end
+			end
+		end
+	end
+end)
 
-if ($opt -eq "1") {
-    $path = "C:\"
-}
-elseif ($opt -eq "2") {
-    $path = Read-Host "Ruta"
-}
-else {
-    exit
-}
+-- Lógica de robo (TODO se valida aquí, en el servidor) ------------------
+local ultimoRobo = {}
 
-# =========================================
-# ⏱️ TIEMPO
-# =========================================
+local function robar(ladron, pedestal)
+	local personaje = ladron.Character
+	local raiz = personaje and personaje:FindFirstChild("HumanoidRootPart")
+	if not raiz then return false end
+	if ladron:GetAttribute("Cargando") then return false end -- ya lleva un objeto
 
-$start = Get-Date
+	local base = pedestal:FindFirstAncestorOfClass("Model")
+	local duenoId = base and base:GetAttribute("Dueno")
+	if not duenoId or duenoId == ladron.UserId then return false end
 
-# =========================================
-# 📦 ANALIZAR JAR
-# =========================================
+	local item = pedestal:GetAttribute("Item")
+	if not item or item == "" then return false end
 
-function Analyze-Jar($filePath) {
-    try {
-        Add-Type -AssemblyName System.IO.Compression.FileSystem
-        $zip = [System.IO.Compression.ZipFile]::OpenRead($filePath)
+	if (raiz.Position - pedestal.Position).Magnitude > RANGO + 5 then return false end
+	if os.clock() - (ultimoRobo[ladron] or 0) < COOLDOWN then return false end
 
-        $found = @()
+	ultimoRobo[ladron] = os.clock()
+	pedestal:SetAttribute("Item", "")
+	ladron:SetAttribute("Cargando", item)
 
-        foreach ($entry in $zip.Entries) {
+	local dueno = Players:GetPlayerByUserId(duenoId)
+	if dueno then
+		alertaEvento:FireClient(dueno, "¡" .. ladron.Name .. " te robó " .. item .. "!")
+	end
+	alertaEvento:FireClient(ladron, "Robaste " .. item .. ". ¡Llévalo a tu base!")
+	return true
+end
 
-            if ($entry.Length -gt 2MB) { continue }
+-- ProximityPrompt en cada pedestal (robo manual)
+local function configurarPedestal(ped)
+	if ped:FindFirstChildOfClass("ProximityPrompt") then return end
+	local prompt = Instance.new("ProximityPrompt")
+	prompt.ActionText = "Robar"
+	prompt.HoldDuration = 1
+	prompt.MaxActivationDistance = RANGO
+	prompt.RequiresLineOfSight = false
+	prompt.Parent = ped
 
-            $stream = $entry.Open()
-            $reader = New-Object System.IO.StreamReader($stream)
+	local function actualizar()
+		local item = ped:GetAttribute("Item")
+		prompt.Enabled = item ~= nil and item ~= ""
+	end
+	ped:GetAttributeChangedSignal("Item"):Connect(actualizar)
+	actualizar()
 
-            try {
-                $content = $reader.ReadToEnd()
+	prompt.Triggered:Connect(function(ladron)
+		robar(ladron, ped)
+	end)
+end
 
-                # detectar unicode primero
-                if ($content -match $unicodeRegex) {
+for _, ped in ipairs(CollectionService:GetTagged("Pedestal")) do
+	configurarPedestal(ped)
+end
+CollectionService:GetInstanceAddedSignal("Pedestal"):Connect(configurarPedestal)
 
-                    foreach ($str in $hackStrings) {
-                        if ($content -match $str) {
-                            $found += $str
-                        }
-                    }
-                }
+-- Depositar el objeto robado en tu base
+local function conectarDeposito(zona)
+	local base = zona:FindFirstAncestorOfClass("Model")
+	zona.Touched:Connect(function(parte)
+		local jugador = Players:GetPlayerFromCharacter(parte.Parent)
+		if not jugador then return end
+		local cargando = jugador:GetAttribute("Cargando")
+		if not cargando or base:GetAttribute("Dueno") ~= jugador.UserId then return end
 
-            } catch {}
+		for _, ped in ipairs(base:GetDescendants()) do
+			if CollectionService:HasTag(ped, "Pedestal") and (ped:GetAttribute("Item") or "") == "" then
+				ped:SetAttribute("Item", cargando)
+				jugador:SetAttribute("Cargando", nil)
+				alertaEvento:FireClient(jugador, "¡Guardaste " .. cargando .. " en tu base!")
+				return
+			end
+		end
+	end)
+end
 
-            $reader.Close()
-        }
+for _, base in ipairs(workspace:WaitForChild("Bases"):GetChildren()) do
+	local zona = base:FindFirstChild("ZonaDeposito")
+	if zona then conectarDeposito(zona) end
+end
 
-        $zip.Dispose()
+-- AUTO ROBAR (función del gamepass) ----------------------------------
+local function tienePase(jugador)
+	if GAMEPASS_ID == 0 then return true end
+	local ok, resultado = pcall(function()
+		return MarketplaceService:UserOwnsGamePassAsync(jugador.UserId, GAMEPASS_ID)
+	end)
+	return ok and resultado
+end
 
-        if ($found.Count -ge $threshold) {
-            return $found | Sort-Object -Unique
-        }
+autoRobarEvento.OnServerEvent:Connect(function(jugador, activar)
+	if typeof(activar) ~= "boolean" then return end
+	if activar and not tienePase(jugador) then
+		MarketplaceService:PromptGamePassPurchase(jugador, GAMEPASS_ID)
+		jugador:SetAttribute("AutoRobar", false)
+		return
+	end
+	jugador:SetAttribute("AutoRobar", activar)
+end)
 
-    } catch {}
+-- Cada 0.5 s, los jugadores con Auto Robar activo roban el pedestal más cercano
+task.spawn(function()
+	while true do
+		task.wait(0.5)
+		for _, jugador in ipairs(Players:GetPlayers()) do
+			if jugador:GetAttribute("AutoRobar") and not jugador:GetAttribute("Cargando") then
+				local raiz = jugador.Character and jugador.Character:FindFirstChild("HumanoidRootPart")
+				if raiz then
+					local mejor, mejorDist = nil, RANGO
+					for _, ped in ipairs(CollectionService:GetTagged("Pedestal")) do
+						local dist = (raiz.Position - ped.Position).Magnitude
+						local item = ped:GetAttribute("Item")
+						if dist <= mejorDist and item and item ~= "" then
+							mejor, mejorDist = ped, dist
+						end
+					end
+					if mejor then robar(jugador, mejor) end
+				end
+			end
+		end
+	end
+end)
 
-    return $null
-}
 
-# =========================================
-# 🔍 ESCANEO
-# =========================================
+--====================================================================
+-- 2) LocalScript "RobarCliente"  (StarterGui)
+--====================================================================
+local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
-Write-Host "`nEscaneando..." -ForegroundColor Yellow
+local jugador = Players.LocalPlayer
+local remotos = ReplicatedStorage:WaitForChild("RobarRemotos")
 
-Get-ChildItem -Path $path -Recurse -File -ErrorAction SilentlyContinue | ForEach-Object {
+local gui = Instance.new("ScreenGui")
+gui.Name = "RobarGui"
+gui.ResetOnSpawn = false
+gui.Parent = jugador:WaitForChild("PlayerGui")
 
-    $file = $_
+-- Botón Auto Robar
+local boton = Instance.new("TextButton")
+boton.Text = "Auto Robar: OFF"
+boton.Font = Enum.Font.GothamBlack
+boton.TextSize = 18
+boton.TextColor3 = Color3.new(1, 1, 1)
+boton.BackgroundColor3 = Color3.fromRGB(200, 40, 70)
+boton.Position = UDim2.new(0, 10, 0.7, 0)
+boton.Size = UDim2.fromOffset(170, 44)
+boton.Parent = gui
+Instance.new("UICorner", boton).CornerRadius = UDim.new(0, 8)
 
-    # 🚫 EXCLUIR SISTEMA TOTALMENTE
-    foreach ($ex in $excludePaths) {
-        if ($file.FullName.StartsWith($ex)) { return }
-    }
+local activo = false
+boton.MouseButton1Click:Connect(function()
+	activo = not activo
+	remotos.AutoRobar:FireServer(activo)
+end)
 
-    if ($file.Attributes -match "System") { return }
+jugador:GetAttributeChangedSignal("AutoRobar"):Connect(function()
+	activo = jugador:GetAttribute("AutoRobar") == true
+	boton.Text = "Auto Robar: " .. (activo and "ON" or "OFF")
+	boton.BackgroundColor3 = activo and Color3.fromRGB(40, 170, 80) or Color3.fromRGB(200, 40, 70)
+end)
 
-    if ($validExtensions -notcontains $file.Extension) { return }
+-- Mensajes de alerta (te robaron / robaste / guardaste)
+local mensaje = Instance.new("TextLabel")
+mensaje.BackgroundTransparency = 1
+mensaje.Font = Enum.Font.GothamBlack
+mensaje.TextSize = 28
+mensaje.TextColor3 = Color3.fromRGB(255, 80, 80)
+mensaje.TextStrokeTransparency = 0
+mensaje.AnchorPoint = Vector2.new(0.5, 0)
+mensaje.Position = UDim2.new(0.5, 0, 0.12, 0)
+mensaje.Size = UDim2.fromOffset(700, 40)
+mensaje.Text = ""
+mensaje.Parent = gui
 
-    try {
-
-        # =========================
-        # 📦 JAR
-        # =========================
-        if ($file.Extension -eq ".jar") {
-
-            $result = Analyze-Jar $file.FullName
-
-            if ($result) {
-                Write-Host "`n[HACK JAR]" -ForegroundColor Red
-                Write-Host $file.FullName -ForegroundColor DarkRed
-
-                Write-Host "Strings detectadas:" -ForegroundColor Magenta
-                $result | ForEach-Object {
-                    Write-Host " - $_" -ForegroundColor Yellow
-                }
-            }
-
-        }
-        else {
-
-            # =========================
-            # 📄 ARCHIVOS NORMALES
-            # =========================
-
-            if ($file.Length -gt 3MB) { return }
-
-            $content = Get-Content $file.FullName -Raw -ErrorAction Stop
-
-            # solo analizar si hay unicode real
-            if ($content -notmatch $unicodeRegex) { return }
-
-            $found = @()
-
-            foreach ($str in $hackStrings) {
-                if ($content -match $str) {
-                    $found += $str
-                }
-            }
-
-            if ($found.Count -ge $threshold) {
-                Write-Host "`n[HACK]" -ForegroundColor Red
-                Write-Host $file.FullName -ForegroundColor DarkRed
-
-                Write-Host "Strings detectadas:" -ForegroundColor Magenta
-                $found | Sort-Object -Unique | ForEach-Object {
-                    Write-Host " - $_" -ForegroundColor Yellow
-                }
-            }
-        }
-
-    } catch {}
-
-}
-
-# =========================================
-# ⏱️ FINAL
-# =========================================
-
-$end = Get-Date
-$time = $end - $start
-
-Write-Host "`nTiempo total: $($time.ToString())" -ForegroundColor Cyan
+local contador = 0
+remotos.Alerta.OnClientEvent:Connect(function(texto)
+	contador += 1
+	local mio = contador
+	mensaje.Text = texto
+	task.delay(3, function()
+		if contador == mio then mensaje.Text = "" end
+	end)
+end)
