@@ -1,261 +1,688 @@
---[[
-=====================================================================
- SISTEMA DE ROBO + "AUTO ROBAR" (para TU juego en Roblox Studio)
-=====================================================================
- Preparación en el Workspace:
-  - Crea una carpeta "Bases" con un Model por jugador (Base1, Base2...).
-  - Dentro de cada Model pon:
-      * Varias Parts que serán los pedestales (en Properties > Tags
-        agrégales la etiqueta "Pedestal" con la ventana Tag Editor).
-      * Una Part llamada "ZonaDeposito" (donde se dejan los objetos robados).
-  - Cada pedestal usa el atributo "Item" (texto). Vacío = libre.
+--=====================================================================
+--  VENICE AIMBOT + ESP + PANEL  |  Roblox / Luau
+--
+--  Panel arrastrable, pestañas, sliders, toggles, keybinds y ESP.
+--  Pegar en LocalScript (StarterPlayerScripts) o en un executor.
+--
+--  Teclas por defecto:  E = aimbot ON/OFF   Q = cambiar parte
+--                       RS = abrir/cerrar panel   RMB = apuntar
+--=====================================================================
 
- Scripts:
-  1) Script      "RobarServidor"  -> ServerScriptService
-  2) LocalScript "RobarCliente"   -> StarterGui
-=====================================================================
-]]
+local CONFIG = {
+	AimPart      = "Head",
+	FOV          = 120,
+	Smoothness   = 0.06,
+	RequireADS   = true,
+	TeamCheck    = true,
+	WallCheck    = true,
+	MaxDistance  = 600,
+	Prediction   = true,
+	BulletSpeed  = 400,
+	DrawFOV      = true,
+	ESP          = true,
+	ESPBox       = true,
+	ESPName      = true,
+	ESPDist      = true,
+	ESPHealth    = true,
+	ESPTracer    = false,
+	ESPChams     = true,
+	ToggleKey    = Enum.KeyCode.E,
+	SwitchKey    = Enum.KeyCode.Q,
+	PanelKey     = Enum.KeyCode.RightShift,
+	AimInput     = Enum.UserInputType.MouseButton2,
+}
 
+local Players          = game:GetService("Players")
+local RunService       = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local TweenService     = game:GetService("TweenService")
+local Workspace        = game:GetService("Workspace")
 
---====================================================================
--- 1) Script "RobarServidor"  (ServerScriptService)
---====================================================================
-local Players = game:GetService("Players")
-local CollectionService = game:GetService("CollectionService")
-local MarketplaceService = game:GetService("MarketplaceService")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local LP        = Players.LocalPlayer
+local PlayerGui = LP:WaitForChild("PlayerGui")
+local Camera    = Workspace.CurrentCamera
 
-local GAMEPASS_ID = 0   -- ID de tu gamepass "Auto Robar" (0 = libre para pruebas)
-local RANGO = 15        -- distancia máxima para robar (studs)
-local COOLDOWN = 3      -- segundos entre robos
+local ACCENT = Color3.fromRGB(157, 78, 221)
+local ACCENT2= Color3.fromRGB(120, 50, 190)
+local GOLD   = Color3.fromRGB(255, 205, 70)
+local BG     = Color3.fromRGB(13, 13, 18)
+local ROW    = Color3.fromRGB(25, 25, 32)
+local TXT    = Color3.fromRGB(232, 232, 240)
 
--- Remotos
-local remotos = Instance.new("Folder")
-remotos.Name = "RobarRemotos"
-remotos.Parent = ReplicatedStorage
-local autoRobarEvento = Instance.new("RemoteEvent")
-autoRobarEvento.Name = "AutoRobar"
-autoRobarEvento.Parent = remotos
-local alertaEvento = Instance.new("RemoteEvent")
-alertaEvento.Name = "Alerta"
-alertaEvento.Parent = remotos
+local enabled, holding, capturing = true, false, false
+local aimPart = CONFIG.AimPart
+local highlight, hlChar
 
--- Asignar una base libre a cada jugador
-local function asignarBase(jugador)
-	local bases = workspace:WaitForChild("Bases")
-	for _, base in ipairs(bases:GetChildren()) do
-		if base:GetAttribute("Dueno") == jugador.UserId then return end
+--=====================================================================
+--  UTILIDADES
+--=====================================================================
+local function new(class, props)
+	local inst = Instance.new(class)
+	for k, v in pairs(props) do inst[k] = v end
+	return inst
+end
+
+local function corner(obj, r)
+	return new("UICorner", { CornerRadius = UDim.new(0, r), Parent = obj })
+end
+
+local function pad(obj, t, r, b, l)
+	return new("UIPadding", {
+		PaddingTop = UDim.new(0, t or 0), PaddingRight = UDim.new(0, r or 0),
+		PaddingBottom = UDim.new(0, b or 0), PaddingLeft = UDim.new(0, l or 0),
+		Parent = obj,
+	})
+end
+
+--=====================================================================
+--  GUI BASE
+--=====================================================================
+local gui = new("ScreenGui", {
+	Name = "VeniceAimbot", ResetOnSpawn = false, IgnoreGuiInset = true,
+	ZIndexBehavior = Enum.ZIndexBehavior.Sibling, Parent = PlayerGui,
+})
+
+--=====================================================================
+--  LIBRERIA DE UI
+--=====================================================================
+local UI = {}
+
+function UI.section(parent, text)
+	local holder = new("Frame", {
+		Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y,
+		BackgroundTransparency = 1, Parent = parent,
+	})
+	new("UIListLayout", { Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder, Parent = holder })
+	pad(holder, 4, 0, 4, 0)
+	new("TextLabel", {
+		Size = UDim2.new(1, 0, 0, 16), BackgroundTransparency = 1,
+		Font = Enum.Font.GothamBold, Text = string.upper(text), TextSize = 10,
+		TextColor3 = ACCENT, TextXAlignment = Enum.TextXAlignment.Left, Parent = holder,
+	})
+	return holder
+end
+
+function UI.toggle(parent, text, default, callback)
+	local row = new("TextButton", {
+		Size = UDim2.new(1, 0, 0, 30), BackgroundColor3 = ROW, BackgroundTransparency = 0.15,
+		Text = "", AutoButtonColor = false, Parent = parent,
+	})
+	corner(row, 6); pad(row, 0, 8, 0, 10)
+
+	new("TextLabel", {
+		Size = UDim2.new(0.7, 0, 1, 0), BackgroundTransparency = 1,
+		Font = Enum.Font.Gotham, Text = text, TextSize = 13, TextColor3 = TXT,
+		TextXAlignment = Enum.TextXAlignment.Left, Parent = row,
+	})
+
+	local pill = new("Frame", {
+		AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, 0, 0.5, 0),
+		Size = UDim2.fromOffset(34, 18), BackgroundColor3 = default and ACCENT or Color3.fromRGB(58, 58, 70), Parent = row,
+	})
+	corner(pill, 999)
+
+	local knob = new("Frame", {
+		AnchorPoint = Vector2.new(0.5, 0.5),
+		Position = default and UDim2.new(1, -9, 0.5, 0) or UDim2.new(0, 9, 0.5, 0),
+		Size = UDim2.fromOffset(14, 14), BackgroundColor3 = Color3.new(1, 1, 1), Parent = pill,
+	})
+	corner(knob, 999)
+
+	local state = default
+	local function render()
+		pill.BackgroundColor3 = state and ACCENT or Color3.fromRGB(58, 58, 70)
+		TweenService:Create(knob, TweenInfo.new(0.15), {
+			Position = state and UDim2.new(1, -9, 0.5, 0) or UDim2.new(0, 9, 0.5, 0),
+		}):Play()
 	end
-	for _, base in ipairs(bases:GetChildren()) do
-		if not base:GetAttribute("Dueno") then
-			base:SetAttribute("Dueno", jugador.UserId)
-			break
+
+	row.MouseButton1Click:Connect(function()
+		state = not state; render()
+		if callback then callback(state) end
+	end)
+	render()
+	return row
+end
+
+function UI.slider(parent, text, min, max, default, suffix, callback)
+	local holder = new("Frame", {
+		Size = UDim2.new(1, 0, 0, 44), BackgroundColor3 = ROW,
+		BackgroundTransparency = 0.15, Parent = parent,
+	})
+	corner(holder, 6); pad(holder, 7, 10, 8, 10)
+
+	new("TextLabel", {
+		Size = UDim2.new(0.6, 0, 0, 14), BackgroundTransparency = 1,
+		Font = Enum.Font.Gotham, Text = text, TextSize = 12, TextColor3 = TXT,
+		TextXAlignment = Enum.TextXAlignment.Left, Parent = holder,
+	})
+	local val = new("TextLabel", {
+		Size = UDim2.new(0.4, 0, 0, 14), BackgroundTransparency = 1,
+		Font = Enum.Font.GothamBold, Text = tostring(default) .. (suffix or ""), TextSize = 12,
+		TextColor3 = GOLD, TextXAlignment = Enum.TextXAlignment.Right, Parent = holder,
+	})
+
+	local track = new("Frame", {
+		AnchorPoint = Vector2.new(0, 1), Position = UDim2.new(0, 0, 1, 0),
+		Size = UDim2.new(1, 0, 0, 6), BackgroundColor3 = Color3.fromRGB(48, 48, 60), Parent = holder,
+	})
+	corner(track, 999)
+	local fill = new("Frame", { Size = UDim2.new(0, 0, 1, 0), BackgroundColor3 = ACCENT, Parent = track })
+	corner(fill, 999)
+	local knob = new("Frame", {
+		AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(0, 0, 0.5, 0),
+		Size = UDim2.fromOffset(12, 12), BackgroundColor3 = Color3.new(1, 1, 1), Parent = track,
+	})
+	corner(knob, 999)
+
+	local value, dragging = default, false
+	local function set(v)
+		value = math.clamp(v, min, max)
+		local p = (value - min) / (max - min)
+		fill.Size = UDim2.new(p, 0, 1, 0)
+		knob.Position = UDim2.new(p, 0, 0.5, 0)
+		val.Text = tostring(math.floor(value * 100) / 100) .. (suffix or "")
+		if callback then callback(value) end
+	end
+	set(default)
+
+	local function fromPos(x)
+		local rel = (x - track.AbsolutePosition.X) / math.max(track.AbsoluteSize.X, 1)
+		set(min + rel * (max - min))
+	end
+
+	holder.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+			dragging = true; fromPos(input.Position.X)
 		end
+	end)
+	UserInputService.InputChanged:Connect(function(input)
+		if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+			fromPos(input.Position.X)
+		end
+	end)
+	UserInputService.InputEnded:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+			dragging = false
+		end
+	end)
+	return holder
+end
+
+function UI.segment(parent, text, options, default, callback)
+	local holder = new("Frame", {
+		Size = UDim2.new(1, 0, 0, 52), BackgroundColor3 = ROW,
+		BackgroundTransparency = 0.15, Parent = parent,
+	})
+	corner(holder, 6); pad(holder, 7, 10, 8, 10)
+
+	new("TextLabel", {
+		Size = UDim2.new(1, 0, 0, 14), BackgroundTransparency = 1,
+		Font = Enum.Font.Gotham, Text = text, TextSize = 12, TextColor3 = TXT,
+		TextXAlignment = Enum.TextXAlignment.Left, Parent = holder,
+	})
+
+	local row = new("Frame", {
+		AnchorPoint = Vector2.new(0, 1), Position = UDim2.new(0, 0, 1, 0),
+		Size = UDim2.new(1, 0, 0, 22), BackgroundTransparency = 1, Parent = holder,
+	})
+	new("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 6), Parent = row })
+
+	local buttons = {}
+	for _, opt in ipairs(options) do
+		local b = new("TextButton", {
+			Size = UDim2.new(1 / #options, -4, 1, 0), BackgroundColor3 = Color3.fromRGB(40, 40, 50),
+			Font = Enum.Font.GothamBold, Text = opt, TextSize = 11, TextColor3 = TXT,
+			AutoButtonColor = false, Parent = row,
+		})
+		corner(b, 5)
+		buttons[opt] = b
 	end
+
+	local function select(opt, fire)
+		for name, b in pairs(buttons) do
+			b.BackgroundColor3 = name == opt and ACCENT or Color3.fromRGB(40, 40, 50)
+		end
+		if fire and callback then callback(opt) end
+	end
+
+	for opt, b in pairs(buttons) do
+		b.MouseButton1Click:Connect(function() select(opt, true) end)
+	end
+	select(default, false)
+	return holder
 end
 
-Players.PlayerAdded:Connect(asignarBase)
--- En Studio el jugador puede entrar antes de que el script conecte el evento
-for _, jugador in ipairs(Players:GetPlayers()) do
-	task.spawn(asignarBase, jugador)
+function UI.keybind(parent, text, default, callback)
+	local row = new("Frame", {
+		Size = UDim2.new(1, 0, 0, 30), BackgroundColor3 = ROW,
+		BackgroundTransparency = 0.15, Parent = parent,
+	})
+	corner(row, 6); pad(row, 0, 8, 0, 10)
+
+	new("TextLabel", {
+		Size = UDim2.new(0.6, 0, 1, 0), BackgroundTransparency = 1,
+		Font = Enum.Font.Gotham, Text = text, TextSize = 13, TextColor3 = TXT,
+		TextXAlignment = Enum.TextXAlignment.Left, Parent = row,
+	})
+
+	local box = new("TextButton", {
+		AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, 0, 0.5, 0),
+		Size = UDim2.fromOffset(62, 20), BackgroundColor3 = Color3.fromRGB(40, 40, 50),
+		Font = Enum.Font.GothamBold, Text = default.Name, TextSize = 11,
+		TextColor3 = GOLD, AutoButtonColor = false, Parent = row,
+	})
+	corner(box, 5)
+
+	box.MouseButton1Click:Connect(function()
+		box.Text = "..."; capturing = true
+		local conn
+		conn = UserInputService.InputBegan:Connect(function(input)
+			if input.UserInputType == Enum.UserInputType.Keyboard then
+				box.Text = input.KeyCode.Name
+				capturing = false
+				if callback then callback(input.KeyCode) end
+				conn:Disconnect()
+			end
+		end)
+	end)
+	return row
 end
 
-Players.PlayerRemoving:Connect(function(jugador)
-	for _, base in ipairs(workspace.Bases:GetChildren()) do
-		if base:GetAttribute("Dueno") == jugador.UserId then
-			base:SetAttribute("Dueno", nil)
-			for _, ped in ipairs(base:GetDescendants()) do
-				if CollectionService:HasTag(ped, "Pedestal") then
-					ped:SetAttribute("Item", "")
-				end
+--=====================================================================
+--  PANEL
+--=====================================================================
+local panel = new("Frame", {
+	Name = "Panel", Size = UDim2.fromOffset(300, 400), Position = UDim2.fromOffset(18, 90),
+	BackgroundColor3 = BG, BackgroundTransparency = 0.05, BorderSizePixel = 0, Parent = gui,
+})
+panel.ZIndex = 10
+corner(panel, 10)
+new("UIStroke", { Color = ACCENT, Transparency = 0.6, Thickness = 1, Parent = panel })
+
+local header = new("Frame", {
+	Size = UDim2.new(1, 0, 0, 34), BackgroundColor3 = ACCENT2,
+	BackgroundTransparency = 0.15, BorderSizePixel = 0, Parent = panel,
+})
+corner(header, 10)
+new("Frame", { Size = UDim2.new(1, 0, 0, 12), Position = UDim2.new(0, 0, 1, -12), BackgroundColor3 = ACCENT2, BackgroundTransparency = 0.15, Parent = header })
+
+new("TextLabel", {
+	Size = UDim2.new(1, -70, 1, 0), Position = UDim2.fromOffset(12, 0), BackgroundTransparency = 1,
+	Font = Enum.Font.GothamBold, Text = "VENICE  •  AIMBOT", TextSize = 12,
+	TextColor3 = Color3.new(1, 1, 1), TextXAlignment = Enum.TextXAlignment.Left, Parent = header,
+})
+
+local minBtn = new("TextButton", {
+	AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -8, 0.5, 0), Size = UDim2.fromOffset(18, 18),
+	BackgroundColor3 = Color3.fromRGB(255, 200, 60), Text = "", AutoButtonColor = false, Parent = header,
+})
+corner(minBtn, 999)
+local closeBtn = new("TextButton", {
+	AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -32, 0.5, 0), Size = UDim2.fromOffset(18, 18),
+	BackgroundColor3 = Color3.fromRGB(255, 90, 90), Text = "", AutoButtonColor = false, Parent = header,
+})
+corner(closeBtn, 999)
+
+local tabBar = new("Frame", {
+	Position = UDim2.fromOffset(0, 34), Size = UDim2.new(1, 0, 0, 28),
+	BackgroundTransparency = 1, Parent = panel,
+})
+new("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 4), Parent = tabBar })
+pad(tabBar, 0, 10, 0, 10)
+
+local content = new("ScrollingFrame", {
+	Position = UDim2.fromOffset(0, 66), Size = UDim2.new(1, 0, 1, -66),
+	BackgroundTransparency = 1, BorderSizePixel = 0,
+	ScrollBarThickness = 3, ScrollBarImageColor3 = ACCENT,
+	CanvasSize = UDim2.new(), AutomaticCanvasSize = Enum.AutomaticSize.Y, Parent = panel,
+})
+pad(content, 0, 10, 10, 10)
+
+local pages, currentTab = {}, nil
+local function addPage(name)
+	local page = new("Frame", { Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1, Visible = false, Parent = content })
+	new("UIListLayout", { Padding = UDim.new(0, 8), SortOrder = Enum.SortOrder.LayoutOrder, Parent = page })
+	pages[name] = page
+	return page
+end
+
+local tabs = { "AIMBOT", "VISUALES", "MISC" }
+for _, t in ipairs(tabs) do
+	local b = new("TextButton", {
+		Size = UDim2.new(1 / #tabs, -4, 1, 0), BackgroundColor3 = Color3.fromRGB(30, 30, 38),
+		Font = Enum.Font.GothamBold, Text = t, TextSize = 10, TextColor3 = TXT,
+		AutoButtonColor = false, Parent = tabBar,
+	})
+	corner(b, 6)
+	b.MouseButton1Click:Connect(function()
+		for n, p in pairs(pages) do p.Visible = (n == t) end
+		for _, other in ipairs(tabBar:GetChildren()) do
+			if other:IsA("TextButton") then
+				other.BackgroundColor3 = other == b and ACCENT or Color3.fromRGB(30, 30, 38)
 			end
 		end
-	end
-end)
-
--- Lógica de robo (TODO se valida aquí, en el servidor) ------------------
-local ultimoRobo = {}
-
-local function robar(ladron, pedestal)
-	local personaje = ladron.Character
-	local raiz = personaje and personaje:FindFirstChild("HumanoidRootPart")
-	if not raiz then return false end
-	if ladron:GetAttribute("Cargando") then return false end -- ya lleva un objeto
-
-	local base = pedestal:FindFirstAncestorOfClass("Model")
-	local duenoId = base and base:GetAttribute("Dueno")
-	if not duenoId or duenoId == ladron.UserId then return false end
-
-	local item = pedestal:GetAttribute("Item")
-	if not item or item == "" then return false end
-
-	if (raiz.Position - pedestal.Position).Magnitude > RANGO + 5 then return false end
-	if os.clock() - (ultimoRobo[ladron] or 0) < COOLDOWN then return false end
-
-	ultimoRobo[ladron] = os.clock()
-	pedestal:SetAttribute("Item", "")
-	ladron:SetAttribute("Cargando", item)
-
-	local dueno = Players:GetPlayerByUserId(duenoId)
-	if dueno then
-		alertaEvento:FireClient(dueno, "¡" .. ladron.Name .. " te robó " .. item .. "!")
-	end
-	alertaEvento:FireClient(ladron, "Robaste " .. item .. ". ¡Llévalo a tu base!")
-	return true
-end
-
--- ProximityPrompt en cada pedestal (robo manual)
-local function configurarPedestal(ped)
-	if ped:FindFirstChildOfClass("ProximityPrompt") then return end
-	local prompt = Instance.new("ProximityPrompt")
-	prompt.ActionText = "Robar"
-	prompt.HoldDuration = 1
-	prompt.MaxActivationDistance = RANGO
-	prompt.RequiresLineOfSight = false
-	prompt.Parent = ped
-
-	local function actualizar()
-		local item = ped:GetAttribute("Item")
-		prompt.Enabled = item ~= nil and item ~= ""
-	end
-	ped:GetAttributeChangedSignal("Item"):Connect(actualizar)
-	actualizar()
-
-	prompt.Triggered:Connect(function(ladron)
-		robar(ladron, ped)
+		currentTab = t
 	end)
 end
 
-for _, ped in ipairs(CollectionService:GetTagged("Pedestal")) do
-	configurarPedestal(ped)
+--=====================================================================
+--  CONTENIDO DE PESTAÑAS
+--=====================================================================
+local pAim = addPage("AIMBOT")
+local s1 = UI.section(pAim, "Aimbot")
+UI.toggle(s1, "Activar aimbot", true, function(v) enabled = v end)
+UI.toggle(s1, "Solo al apuntar (ADS)", CONFIG.RequireADS, function(v) CONFIG.RequireADS = v end)
+UI.segment(s1, "Parte a apuntar", { "Cabeza", "Cuerpo" }, "Cabeza", function(v)
+	aimPart = (v == "Cabeza") and "Head" or "HumanoidRootPart"
+end)
+UI.slider(s1, "FOV", 20, 400, CONFIG.FOV, " px", function(v)
+	CONFIG.FOV = v
+	if circle then circle.Size = UDim2.fromOffset(v * 2, v * 2) end
+end)
+UI.slider(s1, "Suavizado", 0, 0.5, CONFIG.Smoothness, "", function(v) CONFIG.Smoothness = v end)
+UI.slider(s1, "Distancia max", 50, 2000, CONFIG.MaxDistance, " studs", function(v) CONFIG.MaxDistance = v end)
+
+local s2 = UI.section(pAim, "Filtros")
+UI.toggle(s2, "Ignorar equipo", CONFIG.TeamCheck, function(v) CONFIG.TeamCheck = v end)
+UI.toggle(s2, "Chequeo de paredes", CONFIG.WallCheck, function(v) CONFIG.WallCheck = v end)
+UI.toggle(s2, "Prediccion de bala", CONFIG.Prediction, function(v) CONFIG.Prediction = v end)
+UI.slider(s2, "Velocidad de bala", 50, 2000, CONFIG.BulletSpeed, "", function(v) CONFIG.BulletSpeed = v end)
+
+local pVis = addPage("VISUALES")
+local s3 = UI.section(pVis, "ESP")
+UI.toggle(s3, "ESP activado", CONFIG.ESP, function(v) CONFIG.ESP = v end)
+UI.toggle(s3, "Caja", CONFIG.ESPBox, function(v) CONFIG.ESPBox = v end)
+UI.toggle(s3, "Nombre", CONFIG.ESPName, function(v) CONFIG.ESPName = v end)
+UI.toggle(s3, "Distancia", CONFIG.ESPDist, function(v) CONFIG.ESPDist = v end)
+UI.toggle(s3, "Barra de vida", CONFIG.ESPHealth, function(v) CONFIG.ESPHealth = v end)
+UI.toggle(s3, "Linea (tracer)", CONFIG.ESPTracer, function(v) CONFIG.ESPTracer = v end)
+UI.toggle(s3, "Resaltado (chams)", CONFIG.ESPChams, function(v) CONFIG.ESPChams = v end)
+
+local s4 = UI.section(pVis, "Mira")
+UI.toggle(s4, "Mostrar circulo FOV", CONFIG.DrawFOV, function(v) CONFIG.DrawFOV = v; if circle then circle.Visible = v end end)
+
+local pMisc = addPage("MISC")
+local s5 = UI.section(pMisc, "Teclas")
+UI.keybind(s5, "Activar / desactivar", CONFIG.ToggleKey, function(k) CONFIG.ToggleKey = k end)
+UI.keybind(s5, "Cambiar parte", CONFIG.SwitchKey, function(k) CONFIG.SwitchKey = k end)
+UI.keybind(s5, "Abrir / cerrar panel", CONFIG.PanelKey, function(k) CONFIG.PanelKey = k end)
+
+--=====================================================================
+--  CIRCULO DE FOV + WATERMARK
+--=====================================================================
+local circle = new("Frame", {
+	AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
+	Size = UDim2.fromOffset(CONFIG.FOV * 2, CONFIG.FOV * 2),
+	BackgroundTransparency = 1, BorderSizePixel = 0, Visible = CONFIG.DrawFOV, Parent = gui,
+})
+circle.ZIndex = 3
+corner(circle, 999)
+new("UIStroke", { Thickness = 1.5, Color = Color3.fromRGB(0, 255, 150), Transparency = 0.35, Parent = circle })
+
+local wm = new("TextLabel", {
+	AnchorPoint = Vector2.new(1, 1), Position = UDim2.new(1, -12, 1, -12), Size = UDim2.fromOffset(200, 18),
+	BackgroundTransparency = 1, Font = Enum.Font.GothamBold, Text = "VENICE  |  AIMBOT + ESP",
+	TextSize = 12, TextColor3 = Color3.fromRGB(255, 255, 255), TextTransparency = 0.25,
+	TextXAlignment = Enum.TextXAlignment.Right, Parent = gui,
+})
+wm.ZIndex = 3
+
+local openBtn = new("TextButton", {
+	Size = UDim2.fromOffset(38, 38), Position = UDim2.fromOffset(18, 24),
+	BackgroundColor3 = BG, BackgroundTransparency = 0.1, Text = "V",
+	Font = Enum.Font.GothamBold, TextSize = 16, TextColor3 = ACCENT,
+	AutoButtonColor = false, Visible = false, Parent = gui,
+})
+openBtn.ZIndex = 11
+corner(openBtn, 999)
+new("UIStroke", { Color = ACCENT, Transparency = 0.4, Parent = openBtn })
+
+local function setPanelOpen(open)
+	panel.Visible = open
+	openBtn.Visible = not open
 end
-CollectionService:GetInstanceAddedSignal("Pedestal"):Connect(configurarPedestal)
 
--- Depositar el objeto robado en tu base
-local function conectarDeposito(zona)
-	local base = zona:FindFirstAncestorOfClass("Model")
-	zona.Touched:Connect(function(parte)
-		local jugador = Players:GetPlayerFromCharacter(parte.Parent)
-		if not jugador then return end
-		local cargando = jugador:GetAttribute("Cargando")
-		if not cargando or base:GetAttribute("Dueno") ~= jugador.UserId then return end
-
-		for _, ped in ipairs(base:GetDescendants()) do
-			if CollectionService:HasTag(ped, "Pedestal") and (ped:GetAttribute("Item") or "") == "" then
-				ped:SetAttribute("Item", cargando)
-				jugador:SetAttribute("Cargando", nil)
-				alertaEvento:FireClient(jugador, "¡Guardaste " .. cargando .. " en tu base!")
-				return
-			end
+--=====================================================================
+--  ARRASTRAR PANEL
+--=====================================================================
+do
+	local dragging, dragStart, startPos
+	header.InputBegan:Connect(function(input)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+			dragging, dragStart, startPos = true, input.Position, panel.Position
+			input.Changed:Connect(function()
+				if input.UserInputState == Enum.UserInputState.End then dragging = false end
+			end)
+		end
+	end)
+	UserInputService.InputChanged:Connect(function(input)
+		if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+			local d = input.Position - dragStart
+			panel.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X, startPos.Y.Scale, startPos.Y.Offset + d.Y)
 		end
 	end)
 end
 
-for _, base in ipairs(workspace:WaitForChild("Bases"):GetChildren()) do
-	local zona = base:FindFirstChild("ZonaDeposito")
-	if zona then conectarDeposito(zona) end
+--=====================================================================
+--  LOGICA AIMBOT
+--=====================================================================
+local function sameTeam(plr)
+	if not CONFIG.TeamCheck then return false end
+	return LP.Team ~= nil and plr.Team == LP.Team
 end
 
--- AUTO ROBAR (función del gamepass) ----------------------------------
-local function tienePase(jugador)
-	if GAMEPASS_ID == 0 then return true end
-	local ok, resultado = pcall(function()
-		return MarketplaceService:UserOwnsGamePassAsync(jugador.UserId, GAMEPASS_ID)
-	end)
-	return ok and resultado
+local function getPart(char)
+	return char:FindFirstChild(aimPart) or char:FindFirstChild("HumanoidRootPart")
 end
 
-autoRobarEvento.OnServerEvent:Connect(function(jugador, activar)
-	if typeof(activar) ~= "boolean" then return end
-	if activar and not tienePase(jugador) then
-		MarketplaceService:PromptGamePassPurchase(jugador, GAMEPASS_ID)
-		jugador:SetAttribute("AutoRobar", false)
-		return
-	end
-	jugador:SetAttribute("AutoRobar", activar)
-end)
+local function isVisible(part)
+	if not CONFIG.WallCheck then return true end
+	local origin = Camera.CFrame.Position
+	local params = RaycastParams.new()
+	params.FilterType = Enum.RaycastFilterType.Exclude
+	params.FilterDescendantsInstances = { LP.Character }
+	params.IgnoreWater = true
+	local hit = Workspace:Raycast(origin, part.Position - origin, params)
+	return hit == nil or hit.Instance:IsDescendantOf(part.Parent)
+end
 
--- Cada 0.5 s, los jugadores con Auto Robar activo roban el pedestal más cercano
-task.spawn(function()
-	while true do
-		task.wait(0.5)
-		for _, jugador in ipairs(Players:GetPlayers()) do
-			if jugador:GetAttribute("AutoRobar") and not jugador:GetAttribute("Cargando") then
-				local raiz = jugador.Character and jugador.Character:FindFirstChild("HumanoidRootPart")
-				if raiz then
-					local mejor, mejorDist = nil, RANGO
-					for _, ped in ipairs(CollectionService:GetTagged("Pedestal")) do
-						local dist = (raiz.Position - ped.Position).Magnitude
-						local item = ped:GetAttribute("Item")
-						if dist <= mejorDist and item and item ~= "" then
-							mejor, mejorDist = ped, dist
+local function predictedPos(part)
+	if not CONFIG.Prediction then return part.Position end
+	local dist = (part.Position - Camera.CFrame.Position).Magnitude
+	return part.Position + part.AssemblyLinearVelocity * (dist / CONFIG.BulletSpeed)
+end
+
+local function findTarget()
+	local center = Camera.ViewportSize * 0.5
+	local best, bestScore = nil, math.huge
+	for _, plr in ipairs(Players:GetPlayers()) do
+		if plr ~= LP and not sameTeam(plr) then
+			local char = plr.Character
+			if char then
+				local hum, part = char:FindFirstChildOfClass("Humanoid"), getPart(char)
+				if hum and part and hum.Health > 0 then
+					local sp, onScreen = Camera:WorldToViewportPoint(part.Position)
+					if onScreen and sp.Z > 0 then
+						local d2 = (Vector2.new(sp.X, sp.Y) - center).Magnitude
+						if d2 <= CONFIG.FOV and d2 < bestScore then
+							local d3 = (part.Position - Camera.CFrame.Position).Magnitude
+							if d3 <= CONFIG.MaxDistance and isVisible(part) then
+								best, bestScore = { char = char, part = part }, d2
+							end
 						end
 					end
-					if mejor then robar(jugador, mejor) end
 				end
 			end
 		end
 	end
+	return best
+end
+
+local function setHighlight(char)
+	if hlChar == char then return end
+	if highlight then highlight:Destroy(); highlight = nil end
+	hlChar = char
+	if char then
+		highlight = new("Highlight", {
+			FillColor = Color3.fromRGB(255, 60, 60), FillTransparency = 0.75,
+			OutlineColor = Color3.fromRGB(255, 60, 60),
+			DepthMode = Enum.HighlightDepthMode.AlwaysOnTop, Adornee = char, Parent = char,
+		})
+	end
+end
+
+--=====================================================================
+--  LOGICA ESP
+--=====================================================================
+local espCache = {}
+
+local function getESP(plr)
+	if espCache[plr] then return espCache[plr] end
+	local d = {}
+	d.box = new("Frame", { BackgroundTransparency = 1, BorderSizePixel = 0, Parent = gui })
+	d.box.ZIndex = 1
+	d.stroke = new("UIStroke", { Thickness = 1.2, Color = Color3.fromRGB(255, 70, 70), Parent = d.box })
+	d.name = new("TextLabel", { BackgroundTransparency = 1, Font = Enum.Font.GothamBold, TextSize = 11, TextColor3 = Color3.new(1, 1, 1), TextStrokeTransparency = 0.4, Size = UDim2.new(3, 0, 0, 12), Parent = gui })
+	d.name.ZIndex = 1
+	d.dist = new("TextLabel", { BackgroundTransparency = 1, Font = Enum.Font.Gotham, TextSize = 10, TextColor3 = GOLD, TextStrokeTransparency = 0.5, Size = UDim2.new(3, 0, 0, 11), Parent = gui })
+	d.dist.ZIndex = 1
+	d.hp = new("Frame", { BackgroundColor3 = Color3.fromRGB(0, 0, 0), BackgroundTransparency = 0.4, BorderSizePixel = 0, Parent = gui })
+	d.hp.ZIndex = 1
+	d.hpFill = new("Frame", { Size = UDim2.new(1, 0, 1, 0), BackgroundColor3 = Color3.fromRGB(0, 220, 100), BorderSizePixel = 0, Parent = d.hp })
+	d.tracer = new("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), BorderSizePixel = 0, BackgroundColor3 = Color3.fromRGB(255, 70, 70), BackgroundTransparency = 0.5, Size = UDim2.fromOffset(0, 1), Parent = gui })
+	d.tracer.ZIndex = 1
+	espCache[plr] = d
+	return d
+end
+
+local function hideESP(d)
+	for _, v in pairs({ d.box, d.name, d.dist, d.hp, d.tracer }) do v.Visible = false end
+end
+
+Players.PlayerRemoving:Connect(function(plr)
+	local d = espCache[plr]
+	if d then
+		for _, v in pairs({ d.box, d.name, d.dist, d.hp, d.tracer }) do v:Destroy() end
+		espCache[plr] = nil
+	end
 end)
 
+local function updateESP()
+	local vh = Camera.ViewportSize.Y
+	local focal = vh / (2 * math.tan(math.rad(Camera.FieldOfView) / 2))
+	for _, plr in ipairs(Players:GetPlayers()) do
+		local d = getESP(plr)
+		local char = plr.Character
+		local root = char and char:FindFirstChild("HumanoidRootPart")
+		local hum = char and char:FindFirstChildOfClass("Humanoid")
+		local skip = (not CONFIG.ESP) or plr == LP or not root or not hum or hum.Health <= 0 or sameTeam(plr)
+		if skip then
+			hideESP(d)
+		else
+			local pos, onScreen = Camera:WorldToViewportPoint(root.Position)
+			local dist = (Camera.CFrame.Position - root.Position).Magnitude
+			if not onScreen or dist > CONFIG.MaxDistance * 1.5 then
+				hideESP(d)
+			else
+				local h = (5.5 / dist) * focal
+				local w = h * 0.55
+				d.box.Visible = CONFIG.ESPBox
+				d.box.Size = UDim2.fromOffset(w, h)
+				d.box.Position = UDim2.fromOffset(pos.X - w / 2, pos.Y - h / 2)
+				d.stroke.Color = plr.Team == LP.Team and Color3.fromRGB(90, 200, 255) or Color3.fromRGB(255, 70, 70)
 
---====================================================================
--- 2) LocalScript "RobarCliente"  (StarterGui)
---====================================================================
-local Players = game:GetService("Players")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
+				d.name.Visible = CONFIG.ESPName
+				d.name.Text = plr.Name
+				d.name.Position = UDim2.fromOffset(pos.X - (w * 1.5) / 2, pos.Y - h / 2 - 14)
 
-local jugador = Players.LocalPlayer
-local remotos = ReplicatedStorage:WaitForChild("RobarRemotos")
+				d.dist.Visible = CONFIG.ESPDist
+				d.dist.Text = string.format("%d studs", dist)
+				d.dist.Position = UDim2.fromOffset(pos.X - (w * 1.5) / 2, pos.Y + h / 2 + 1)
 
-local gui = Instance.new("ScreenGui")
-gui.Name = "RobarGui"
-gui.ResetOnSpawn = false
-gui.Parent = jugador:WaitForChild("PlayerGui")
+				d.hp.Visible = CONFIG.ESPHealth
+				d.hp.Size = UDim2.fromOffset(3, h)
+				d.hp.Position = UDim2.fromOffset(pos.X - w / 2 - 6, pos.Y - h / 2)
+				d.hpFill.Size = UDim2.new(1, 0, hum.Health / hum.MaxHealth, 0)
+				d.hpFill.Position = UDim2.new(0, 0, 1 - hum.Health / hum.MaxHealth, 0)
+				d.hpFill.BackgroundColor3 = Color3.fromRGB(255 * (1 - hum.Health / hum.MaxHealth), 220 * (hum.Health / hum.MaxHealth), 90)
 
--- Botón Auto Robar
-local boton = Instance.new("TextButton")
-boton.Text = "Auto Robar: OFF"
-boton.Font = Enum.Font.GothamBlack
-boton.TextSize = 18
-boton.TextColor3 = Color3.new(1, 1, 1)
-boton.BackgroundColor3 = Color3.fromRGB(200, 40, 70)
-boton.Position = UDim2.new(0, 10, 0.7, 0)
-boton.Size = UDim2.fromOffset(170, 44)
-boton.Parent = gui
-Instance.new("UICorner", boton).CornerRadius = UDim.new(0, 8)
+				d.tracer.Visible = CONFIG.ESPTracer
+				if CONFIG.ESPTracer then
+					local from = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y)
+					local to = Vector2.new(pos.X, pos.Y)
+					local delta = to - from
+					d.tracer.Size = UDim2.fromOffset(delta.Magnitude, 1)
+					d.tracer.Position = UDim2.fromOffset((from.X + to.X) / 2, (from.Y + to.Y) / 2)
+					d.tracer.Rotation = math.deg(math.atan2(delta.Y, delta.X))
+				end
+			end
+		end
+	end
+end
 
-local activo = false
-boton.MouseButton1Click:Connect(function()
-	activo = not activo
-	remotos.AutoRobar:FireServer(activo)
+--=====================================================================
+--  LOOP PRINCIPAL
+--=====================================================================
+local function onRender(dt)
+	if updateESP then updateESP() end
+
+	if not enabled or (CONFIG.RequireADS and not holding) then
+		setHighlight(nil)
+		return
+	end
+	local char = LP.Character
+	local hum = char and char:FindFirstChildOfClass("Humanoid")
+	if not hum or hum.Health <= 0 then return end
+
+	local t = findTarget()
+	if not t then setHighlight(nil); return end
+
+	if CONFIG.ESPChams then setHighlight(t.char) else setHighlight(nil) end
+
+	local desired = CFrame.lookAt(Camera.CFrame.Position, predictedPos(t.part))
+	local alpha = CONFIG.Smoothness <= 0 and 1 or (1 - math.exp(-dt / CONFIG.Smoothness))
+	Camera.CFrame = Camera.CFrame:Lerp(desired, math.clamp(alpha, 0, 1))
+end
+
+RunService:BindToRenderStep("VeniceAimbot", Enum.RenderPriority.Camera.Value + 1, onRender)
+
+--=====================================================================
+--  INPUT
+--=====================================================================
+UserInputService.InputBegan:Connect(function(input, gpe)
+	if gpe or capturing then return end
+	if input.UserInputType == CONFIG.AimInput then holding = true end
+
+	if input.KeyCode == CONFIG.ToggleKey then
+		enabled = not enabled
+		wm.Text = "VENICE  |  " .. (enabled and "ON" or "OFF")
+		wm.TextColor3 = enabled and Color3.new(1, 1, 1) or Color3.fromRGB(255, 90, 90)
+		if not enabled then setHighlight(nil) end
+	end
+
+	if input.KeyCode == CONFIG.SwitchKey then
+		aimPart = (aimPart == "Head") and "HumanoidRootPart" or "Head"
+	end
+
+	if input.KeyCode == CONFIG.PanelKey then
+		setPanelOpen(not panel.Visible)
+	end
 end)
 
-jugador:GetAttributeChangedSignal("AutoRobar"):Connect(function()
-	activo = jugador:GetAttribute("AutoRobar") == true
-	boton.Text = "Auto Robar: " .. (activo and "ON" or "OFF")
-	boton.BackgroundColor3 = activo and Color3.fromRGB(40, 170, 80) or Color3.fromRGB(200, 40, 70)
+UserInputService.InputEnded:Connect(function(input)
+	if input.UserInputType == CONFIG.AimInput then holding = false end
 end)
 
--- Mensajes de alerta (te robaron / robaste / guardaste)
-local mensaje = Instance.new("TextLabel")
-mensaje.BackgroundTransparency = 1
-mensaje.Font = Enum.Font.GothamBlack
-mensaje.TextSize = 28
-mensaje.TextColor3 = Color3.fromRGB(255, 80, 80)
-mensaje.TextStrokeTransparency = 0
-mensaje.AnchorPoint = Vector2.new(0.5, 0)
-mensaje.Position = UDim2.new(0.5, 0, 0.12, 0)
-mensaje.Size = UDim2.fromOffset(700, 40)
-mensaje.Text = ""
-mensaje.Parent = gui
+minBtn.MouseButton1Click:Connect(function() setPanelOpen(false) end)
+closeBtn.MouseButton1Click:Connect(function() setPanelOpen(false) end)
+openBtn.MouseButton1Click:Connect(function() setPanelOpen(true) end)
 
-local contador = 0
-remotos.Alerta.OnClientEvent:Connect(function(texto)
-	contador += 1
-	local mio = contador
-	mensaje.Text = texto
-	task.delay(3, function()
-		if contador == mio then mensaje.Text = "" end
-	end)
+Workspace:GetPropertyChangedSignal("CurrentCamera"):Connect(function()
+	if Workspace.CurrentCamera then Camera = Workspace.CurrentCamera end
 end)
+
+-- Abrir la primera pestaña
+for _, p in pairs(pages) do p.Visible = false end
+pAim.Visible = true
+tabBar:GetChildren()[1].BackgroundColor3 = ACCENT
