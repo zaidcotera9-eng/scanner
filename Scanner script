@@ -1,11 +1,5 @@
 --=====================================================================
---  VENICE AIMBOT + ESP + PANEL  |  Roblox / Luau
---
---  Panel arrastrable, pestañas, sliders, toggles, keybinds y ESP.
---  Pegar en LocalScript (StarterPlayerScripts) o en un executor.
---
---  Teclas por defecto:  E = aimbot ON/OFF   Q = cambiar parte
---                       RS = abrir/cerrar panel   RMB = apuntar
+--  VENICE AIMBOT + ESP + PANEL  |  v2 (CORREGIDO)
 --=====================================================================
 
 local CONFIG = {
@@ -42,6 +36,21 @@ local LP        = Players.LocalPlayer
 local PlayerGui = LP:WaitForChild("PlayerGui")
 local Camera    = Workspace.CurrentCamera
 
+--=====================================================================
+--  FIX 1: limpiar ejecuciones anteriores
+--=====================================================================
+if type(_G.VeniceCleanup) == "function" then
+	pcall(_G.VeniceCleanup)
+end
+_G.VeniceCleanup = nil
+
+local dead, connections = false, {}
+local function connect(signal, fn)
+	local c = signal:Connect(fn)
+	connections[#connections + 1] = c
+	return c
+end
+
 local ACCENT = Color3.fromRGB(157, 78, 221)
 local ACCENT2= Color3.fromRGB(120, 50, 190)
 local GOLD   = Color3.fromRGB(255, 205, 70)
@@ -50,27 +59,22 @@ local ROW    = Color3.fromRGB(25, 25, 32)
 local TXT    = Color3.fromRGB(232, 232, 240)
 
 local enabled, holding, capturing = true, false, false
+local panelKeyDown = false
 local aimPart = CONFIG.AimPart
 local highlight, hlChar
 
---=====================================================================
---  UTILIDADES
---=====================================================================
 local function new(class, props)
 	local inst = Instance.new(class)
 	for k, v in pairs(props) do inst[k] = v end
 	return inst
 end
-
 local function corner(obj, r)
 	return new("UICorner", { CornerRadius = UDim.new(0, r), Parent = obj })
 end
-
 local function pad(obj, t, r, b, l)
 	return new("UIPadding", {
 		PaddingTop = UDim.new(0, t or 0), PaddingRight = UDim.new(0, r or 0),
-		PaddingBottom = UDim.new(0, b or 0), PaddingLeft = UDim.new(0, l or 0),
-		Parent = obj,
+		PaddingBottom = UDim.new(0, b or 0), PaddingLeft = UDim.new(0, l or 0), Parent = obj,
 	})
 end
 
@@ -79,6 +83,7 @@ end
 --=====================================================================
 local gui = new("ScreenGui", {
 	Name = "VeniceAimbot", ResetOnSpawn = false, IgnoreGuiInset = true,
+	DisplayOrder = 9999, -- FIX 2: que el juego no lo tape
 	ZIndexBehavior = Enum.ZIndexBehavior.Sibling, Parent = PlayerGui,
 })
 
@@ -108,19 +113,16 @@ function UI.toggle(parent, text, default, callback)
 		Text = "", AutoButtonColor = false, Parent = parent,
 	})
 	corner(row, 6); pad(row, 0, 8, 0, 10)
-
 	new("TextLabel", {
-		Size = UDim2.new(0.7, 0, 1, 0), BackgroundTransparency = 1,
-		Font = Enum.Font.Gotham, Text = text, TextSize = 13, TextColor3 = TXT,
-		TextXAlignment = Enum.TextXAlignment.Left, Parent = row,
+		Size = UDim2.new(0.7, 0, 1, 0), BackgroundTransparency = 1, Font = Enum.Font.Gotham,
+		Text = text, TextSize = 13, TextColor3 = TXT, TextXAlignment = Enum.TextXAlignment.Left, Parent = row,
 	})
-
 	local pill = new("Frame", {
 		AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, 0, 0.5, 0),
-		Size = UDim2.fromOffset(34, 18), BackgroundColor3 = default and ACCENT or Color3.fromRGB(58, 58, 70), Parent = row,
+		Size = UDim2.fromOffset(34, 18),
+		BackgroundColor3 = default and ACCENT or Color3.fromRGB(58, 58, 70), Parent = row,
 	})
 	corner(pill, 999)
-
 	local knob = new("Frame", {
 		AnchorPoint = Vector2.new(0.5, 0.5),
 		Position = default and UDim2.new(1, -9, 0.5, 0) or UDim2.new(0, 9, 0.5, 0),
@@ -135,8 +137,7 @@ function UI.toggle(parent, text, default, callback)
 			Position = state and UDim2.new(1, -9, 0.5, 0) or UDim2.new(0, 9, 0.5, 0),
 		}):Play()
 	end
-
-	row.MouseButton1Click:Connect(function()
+	row.MouseButton1Down:Connect(function()
 		state = not state; render()
 		if callback then callback(state) end
 	end)
@@ -146,22 +147,18 @@ end
 
 function UI.slider(parent, text, min, max, default, suffix, callback)
 	local holder = new("Frame", {
-		Size = UDim2.new(1, 0, 0, 44), BackgroundColor3 = ROW,
-		BackgroundTransparency = 0.15, Parent = parent,
+		Size = UDim2.new(1, 0, 0, 44), BackgroundColor3 = ROW, BackgroundTransparency = 0.15, Parent = parent,
 	})
 	corner(holder, 6); pad(holder, 7, 10, 8, 10)
-
 	new("TextLabel", {
-		Size = UDim2.new(0.6, 0, 0, 14), BackgroundTransparency = 1,
-		Font = Enum.Font.Gotham, Text = text, TextSize = 12, TextColor3 = TXT,
-		TextXAlignment = Enum.TextXAlignment.Left, Parent = holder,
+		Size = UDim2.new(0.6, 0, 0, 14), BackgroundTransparency = 1, Font = Enum.Font.Gotham,
+		Text = text, TextSize = 12, TextColor3 = TXT, TextXAlignment = Enum.TextXAlignment.Left, Parent = holder,
 	})
 	local val = new("TextLabel", {
-		Size = UDim2.new(0.4, 0, 0, 14), BackgroundTransparency = 1,
-		Font = Enum.Font.GothamBold, Text = tostring(default) .. (suffix or ""), TextSize = 12,
-		TextColor3 = GOLD, TextXAlignment = Enum.TextXAlignment.Right, Parent = holder,
+		Size = UDim2.new(0.4, 0, 0, 14), BackgroundTransparency = 1, Font = Enum.Font.GothamBold,
+		Text = tostring(default) .. (suffix or ""), TextSize = 12, TextColor3 = GOLD,
+		TextXAlignment = Enum.TextXAlignment.Right, Parent = holder,
 	})
-
 	local track = new("Frame", {
 		AnchorPoint = Vector2.new(0, 1), Position = UDim2.new(0, 0, 1, 0),
 		Size = UDim2.new(1, 0, 0, 6), BackgroundColor3 = Color3.fromRGB(48, 48, 60), Parent = holder,
@@ -185,23 +182,21 @@ function UI.slider(parent, text, min, max, default, suffix, callback)
 		if callback then callback(value) end
 	end
 	set(default)
-
 	local function fromPos(x)
 		local rel = (x - track.AbsolutePosition.X) / math.max(track.AbsoluteSize.X, 1)
 		set(min + rel * (max - min))
 	end
-
 	holder.InputBegan:Connect(function(input)
 		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
 			dragging = true; fromPos(input.Position.X)
 		end
 	end)
-	UserInputService.InputChanged:Connect(function(input)
+	connect(UserInputService.InputChanged, function(input)
 		if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
 			fromPos(input.Position.X)
 		end
 	end)
-	UserInputService.InputEnded:Connect(function(input)
+	connect(UserInputService.InputEnded, function(input)
 		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
 			dragging = false
 		end
@@ -211,23 +206,18 @@ end
 
 function UI.segment(parent, text, options, default, callback)
 	local holder = new("Frame", {
-		Size = UDim2.new(1, 0, 0, 52), BackgroundColor3 = ROW,
-		BackgroundTransparency = 0.15, Parent = parent,
+		Size = UDim2.new(1, 0, 0, 52), BackgroundColor3 = ROW, BackgroundTransparency = 0.15, Parent = parent,
 	})
 	corner(holder, 6); pad(holder, 7, 10, 8, 10)
-
 	new("TextLabel", {
-		Size = UDim2.new(1, 0, 0, 14), BackgroundTransparency = 1,
-		Font = Enum.Font.Gotham, Text = text, TextSize = 12, TextColor3 = TXT,
-		TextXAlignment = Enum.TextXAlignment.Left, Parent = holder,
+		Size = UDim2.new(1, 0, 0, 14), BackgroundTransparency = 1, Font = Enum.Font.Gotham,
+		Text = text, TextSize = 12, TextColor3 = TXT, TextXAlignment = Enum.TextXAlignment.Left, Parent = holder,
 	})
-
 	local row = new("Frame", {
 		AnchorPoint = Vector2.new(0, 1), Position = UDim2.new(0, 0, 1, 0),
 		Size = UDim2.new(1, 0, 0, 22), BackgroundTransparency = 1, Parent = holder,
 	})
 	new("UIListLayout", { FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 6), Parent = row })
-
 	local buttons = {}
 	for _, opt in ipairs(options) do
 		local b = new("TextButton", {
@@ -238,16 +228,14 @@ function UI.segment(parent, text, options, default, callback)
 		corner(b, 5)
 		buttons[opt] = b
 	end
-
 	local function select(opt, fire)
 		for name, b in pairs(buttons) do
 			b.BackgroundColor3 = name == opt and ACCENT or Color3.fromRGB(40, 40, 50)
 		end
 		if fire and callback then callback(opt) end
 	end
-
 	for opt, b in pairs(buttons) do
-		b.MouseButton1Click:Connect(function() select(opt, true) end)
+		b.MouseButton1Down:Connect(function() select(opt, true) end)
 	end
 	select(default, false)
 	return holder
@@ -255,17 +243,13 @@ end
 
 function UI.keybind(parent, text, default, callback)
 	local row = new("Frame", {
-		Size = UDim2.new(1, 0, 0, 30), BackgroundColor3 = ROW,
-		BackgroundTransparency = 0.15, Parent = parent,
+		Size = UDim2.new(1, 0, 0, 30), BackgroundColor3 = ROW, BackgroundTransparency = 0.15, Parent = parent,
 	})
 	corner(row, 6); pad(row, 0, 8, 0, 10)
-
 	new("TextLabel", {
-		Size = UDim2.new(0.6, 0, 1, 0), BackgroundTransparency = 1,
-		Font = Enum.Font.Gotham, Text = text, TextSize = 13, TextColor3 = TXT,
-		TextXAlignment = Enum.TextXAlignment.Left, Parent = row,
+		Size = UDim2.new(0.6, 0, 1, 0), BackgroundTransparency = 1, Font = Enum.Font.Gotham,
+		Text = text, TextSize = 13, TextColor3 = TXT, TextXAlignment = Enum.TextXAlignment.Left, Parent = row,
 	})
-
 	local box = new("TextButton", {
 		AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, 0, 0.5, 0),
 		Size = UDim2.fromOffset(62, 20), BackgroundColor3 = Color3.fromRGB(40, 40, 50),
@@ -273,8 +257,7 @@ function UI.keybind(parent, text, default, callback)
 		TextColor3 = GOLD, AutoButtonColor = false, Parent = row,
 	})
 	corner(box, 5)
-
-	box.MouseButton1Click:Connect(function()
+	box.MouseButton1Down:Connect(function()
 		box.Text = "..."; capturing = true
 		local conn
 		conn = UserInputService.InputBegan:Connect(function(input)
@@ -305,14 +288,15 @@ local header = new("Frame", {
 	BackgroundTransparency = 0.15, BorderSizePixel = 0, Parent = panel,
 })
 corner(header, 10)
-new("Frame", { Size = UDim2.new(1, 0, 0, 12), Position = UDim2.new(0, 0, 1, -12), BackgroundColor3 = ACCENT2, BackgroundTransparency = 0.15, Parent = header })
-
+new("Frame", {
+	Size = UDim2.new(1, 0, 0, 12), Position = UDim2.new(0, 0, 1, -12),
+	BackgroundColor3 = ACCENT2, BackgroundTransparency = 0.15, Parent = header,
+})
 new("TextLabel", {
 	Size = UDim2.new(1, -70, 1, 0), Position = UDim2.fromOffset(12, 0), BackgroundTransparency = 1,
 	Font = Enum.Font.GothamBold, Text = "VENICE  •  AIMBOT", TextSize = 12,
 	TextColor3 = Color3.new(1, 1, 1), TextXAlignment = Enum.TextXAlignment.Left, Parent = header,
 })
-
 local minBtn = new("TextButton", {
 	AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -8, 0.5, 0), Size = UDim2.fromOffset(18, 18),
 	BackgroundColor3 = Color3.fromRGB(255, 200, 60), Text = "", AutoButtonColor = false, Parent = header,
@@ -333,21 +317,26 @@ pad(tabBar, 0, 10, 0, 10)
 
 local content = new("ScrollingFrame", {
 	Position = UDim2.fromOffset(0, 66), Size = UDim2.new(1, 0, 1, -66),
-	BackgroundTransparency = 1, BorderSizePixel = 0,
-	ScrollBarThickness = 3, ScrollBarImageColor3 = ACCENT,
-	CanvasSize = UDim2.new(), AutomaticCanvasSize = Enum.AutomaticSize.Y, Parent = panel,
+	BackgroundTransparency = 1, BorderSizePixel = 0, ScrollBarThickness = 3,
+	ScrollBarImageColor3 = ACCENT, CanvasSize = UDim2.new(),
+	AutomaticCanvasSize = Enum.AutomaticSize.Y, Parent = panel,
 })
 pad(content, 0, 10, 10, 10)
 
-local pages, currentTab = {}, nil
+local pages = {}
 local function addPage(name)
-	local page = new("Frame", { Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1, Visible = false, Parent = content })
+	local page = new("Frame", {
+		Size = UDim2.new(1, 0, 0, 0), AutomaticSize = Enum.AutomaticSize.Y,
+		BackgroundTransparency = 1, Visible = false, Parent = content,
+	})
 	new("UIListLayout", { Padding = UDim.new(0, 8), SortOrder = Enum.SortOrder.LayoutOrder, Parent = page })
 	pages[name] = page
 	return page
 end
 
+-- FIX 3: guardar los botones en tabla (antes se accedia por GetChildren y daba error)
 local tabs = { "AIMBOT", "VISUALES", "MISC" }
+local tabButtons = {}
 for _, t in ipairs(tabs) do
 	local b = new("TextButton", {
 		Size = UDim2.new(1 / #tabs, -4, 1, 0), BackgroundColor3 = Color3.fromRGB(30, 30, 38),
@@ -355,20 +344,20 @@ for _, t in ipairs(tabs) do
 		AutoButtonColor = false, Parent = tabBar,
 	})
 	corner(b, 6)
-	b.MouseButton1Click:Connect(function()
+	tabButtons[t] = b
+	b.MouseButton1Down:Connect(function()
 		for n, p in pairs(pages) do p.Visible = (n == t) end
-		for _, other in ipairs(tabBar:GetChildren()) do
-			if other:IsA("TextButton") then
-				other.BackgroundColor3 = other == b and ACCENT or Color3.fromRGB(30, 30, 38)
-			end
+		for n, other in pairs(tabButtons) do
+			other.BackgroundColor3 = (n == t) and ACCENT or Color3.fromRGB(30, 30, 38)
 		end
-		currentTab = t
 	end)
 end
 
 --=====================================================================
---  CONTENIDO DE PESTAÑAS
+--  CONTENIDO
 --=====================================================================
+local circle -- declarado antes por el slider de FOV
+
 local pAim = addPage("AIMBOT")
 local s1 = UI.section(pAim, "Aimbot")
 UI.toggle(s1, "Activar aimbot", true, function(v) enabled = v end)
@@ -398,9 +387,10 @@ UI.toggle(s3, "Distancia", CONFIG.ESPDist, function(v) CONFIG.ESPDist = v end)
 UI.toggle(s3, "Barra de vida", CONFIG.ESPHealth, function(v) CONFIG.ESPHealth = v end)
 UI.toggle(s3, "Linea (tracer)", CONFIG.ESPTracer, function(v) CONFIG.ESPTracer = v end)
 UI.toggle(s3, "Resaltado (chams)", CONFIG.ESPChams, function(v) CONFIG.ESPChams = v end)
-
 local s4 = UI.section(pVis, "Mira")
-UI.toggle(s4, "Mostrar circulo FOV", CONFIG.DrawFOV, function(v) CONFIG.DrawFOV = v; if circle then circle.Visible = v end end)
+UI.toggle(s4, "Mostrar circulo FOV", CONFIG.DrawFOV, function(v)
+	CONFIG.DrawFOV = v; if circle then circle.Visible = v end
+end)
 
 local pMisc = addPage("MISC")
 local s5 = UI.section(pMisc, "Teclas")
@@ -409,9 +399,9 @@ UI.keybind(s5, "Cambiar parte", CONFIG.SwitchKey, function(k) CONFIG.SwitchKey =
 UI.keybind(s5, "Abrir / cerrar panel", CONFIG.PanelKey, function(k) CONFIG.PanelKey = k end)
 
 --=====================================================================
---  CIRCULO DE FOV + WATERMARK
+--  CIRCULO + WATERMARK
 --=====================================================================
-local circle = new("Frame", {
+circle = new("Frame", {
 	AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
 	Size = UDim2.fromOffset(CONFIG.FOV * 2, CONFIG.FOV * 2),
 	BackgroundTransparency = 1, BorderSizePixel = 0, Visible = CONFIG.DrawFOV, Parent = gui,
@@ -423,7 +413,7 @@ new("UIStroke", { Thickness = 1.5, Color = Color3.fromRGB(0, 255, 150), Transpar
 local wm = new("TextLabel", {
 	AnchorPoint = Vector2.new(1, 1), Position = UDim2.new(1, -12, 1, -12), Size = UDim2.fromOffset(200, 18),
 	BackgroundTransparency = 1, Font = Enum.Font.GothamBold, Text = "VENICE  |  AIMBOT + ESP",
-	TextSize = 12, TextColor3 = Color3.fromRGB(255, 255, 255), TextTransparency = 0.25,
+	TextSize = 12, TextColor3 = Color3.new(1, 1, 1), TextTransparency = 0.25,
 	TextXAlignment = Enum.TextXAlignment.Right, Parent = gui,
 })
 wm.ZIndex = 3
@@ -438,13 +428,15 @@ openBtn.ZIndex = 11
 corner(openBtn, 999)
 new("UIStroke", { Color = ACCENT, Transparency = 0.4, Parent = openBtn })
 
+-- FIX 4: setPanelOpen ya no hace nada si el estado no cambia
 local function setPanelOpen(open)
+	if panel.Visible == open then return end
 	panel.Visible = open
 	openBtn.Visible = not open
 end
 
 --=====================================================================
---  ARRASTRAR PANEL
+--  ARRASTRAR
 --=====================================================================
 do
 	local dragging, dragStart, startPos
@@ -456,7 +448,7 @@ do
 			end)
 		end
 	end)
-	UserInputService.InputChanged:Connect(function(input)
+	connect(UserInputService.InputChanged, function(input)
 		if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
 			local d = input.Position - dragStart
 			panel.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X, startPos.Y.Scale, startPos.Y.Offset + d.Y)
@@ -471,11 +463,9 @@ local function sameTeam(plr)
 	if not CONFIG.TeamCheck then return false end
 	return LP.Team ~= nil and plr.Team == LP.Team
 end
-
 local function getPart(char)
 	return char:FindFirstChild(aimPart) or char:FindFirstChild("HumanoidRootPart")
 end
-
 local function isVisible(part)
 	if not CONFIG.WallCheck then return true end
 	local origin = Camera.CFrame.Position
@@ -486,13 +476,11 @@ local function isVisible(part)
 	local hit = Workspace:Raycast(origin, part.Position - origin, params)
 	return hit == nil or hit.Instance:IsDescendantOf(part.Parent)
 end
-
 local function predictedPos(part)
 	if not CONFIG.Prediction then return part.Position end
 	local dist = (part.Position - Camera.CFrame.Position).Magnitude
 	return part.Position + part.AssemblyLinearVelocity * (dist / CONFIG.BulletSpeed)
 end
-
 local function findTarget()
 	local center = Camera.ViewportSize * 0.5
 	local best, bestScore = nil, math.huge
@@ -518,7 +506,6 @@ local function findTarget()
 	end
 	return best
 end
-
 local function setHighlight(char)
 	if hlChar == char then return end
 	if highlight then highlight:Destroy(); highlight = nil end
@@ -536,7 +523,6 @@ end
 --  LOGICA ESP
 --=====================================================================
 local espCache = {}
-
 local function getESP(plr)
 	if espCache[plr] then return espCache[plr] end
 	local d = {}
@@ -547,7 +533,7 @@ local function getESP(plr)
 	d.name.ZIndex = 1
 	d.dist = new("TextLabel", { BackgroundTransparency = 1, Font = Enum.Font.Gotham, TextSize = 10, TextColor3 = GOLD, TextStrokeTransparency = 0.5, Size = UDim2.new(3, 0, 0, 11), Parent = gui })
 	d.dist.ZIndex = 1
-	d.hp = new("Frame", { BackgroundColor3 = Color3.fromRGB(0, 0, 0), BackgroundTransparency = 0.4, BorderSizePixel = 0, Parent = gui })
+	d.hp = new("Frame", { BackgroundColor3 = Color3.new(0, 0, 0), BackgroundTransparency = 0.4, BorderSizePixel = 0, Parent = gui })
 	d.hp.ZIndex = 1
 	d.hpFill = new("Frame", { Size = UDim2.new(1, 0, 1, 0), BackgroundColor3 = Color3.fromRGB(0, 220, 100), BorderSizePixel = 0, Parent = d.hp })
 	d.tracer = new("Frame", { AnchorPoint = Vector2.new(0.5, 0.5), BorderSizePixel = 0, BackgroundColor3 = Color3.fromRGB(255, 70, 70), BackgroundTransparency = 0.5, Size = UDim2.fromOffset(0, 1), Parent = gui })
@@ -555,134 +541,15 @@ local function getESP(plr)
 	espCache[plr] = d
 	return d
 end
-
 local function hideESP(d)
 	for _, v in pairs({ d.box, d.name, d.dist, d.hp, d.tracer }) do v.Visible = false end
 end
-
-Players.PlayerRemoving:Connect(function(plr)
+connect(Players.PlayerRemoving, function(plr)
 	local d = espCache[plr]
 	if d then
 		for _, v in pairs({ d.box, d.name, d.dist, d.hp, d.tracer }) do v:Destroy() end
 		espCache[plr] = nil
 	end
 end)
-
 local function updateESP()
-	local vh = Camera.ViewportSize.Y
-	local focal = vh / (2 * math.tan(math.rad(Camera.FieldOfView) / 2))
-	for _, plr in ipairs(Players:GetPlayers()) do
-		local d = getESP(plr)
-		local char = plr.Character
-		local root = char and char:FindFirstChild("HumanoidRootPart")
-		local hum = char and char:FindFirstChildOfClass("Humanoid")
-		local skip = (not CONFIG.ESP) or plr == LP or not root or not hum or hum.Health <= 0 or sameTeam(plr)
-		if skip then
-			hideESP(d)
-		else
-			local pos, onScreen = Camera:WorldToViewportPoint(root.Position)
-			local dist = (Camera.CFrame.Position - root.Position).Magnitude
-			if not onScreen or dist > CONFIG.MaxDistance * 1.5 then
-				hideESP(d)
-			else
-				local h = (5.5 / dist) * focal
-				local w = h * 0.55
-				d.box.Visible = CONFIG.ESPBox
-				d.box.Size = UDim2.fromOffset(w, h)
-				d.box.Position = UDim2.fromOffset(pos.X - w / 2, pos.Y - h / 2)
-				d.stroke.Color = plr.Team == LP.Team and Color3.fromRGB(90, 200, 255) or Color3.fromRGB(255, 70, 70)
-
-				d.name.Visible = CONFIG.ESPName
-				d.name.Text = plr.Name
-				d.name.Position = UDim2.fromOffset(pos.X - (w * 1.5) / 2, pos.Y - h / 2 - 14)
-
-				d.dist.Visible = CONFIG.ESPDist
-				d.dist.Text = string.format("%d studs", dist)
-				d.dist.Position = UDim2.fromOffset(pos.X - (w * 1.5) / 2, pos.Y + h / 2 + 1)
-
-				d.hp.Visible = CONFIG.ESPHealth
-				d.hp.Size = UDim2.fromOffset(3, h)
-				d.hp.Position = UDim2.fromOffset(pos.X - w / 2 - 6, pos.Y - h / 2)
-				d.hpFill.Size = UDim2.new(1, 0, hum.Health / hum.MaxHealth, 0)
-				d.hpFill.Position = UDim2.new(0, 0, 1 - hum.Health / hum.MaxHealth, 0)
-				d.hpFill.BackgroundColor3 = Color3.fromRGB(255 * (1 - hum.Health / hum.MaxHealth), 220 * (hum.Health / hum.MaxHealth), 90)
-
-				d.tracer.Visible = CONFIG.ESPTracer
-				if CONFIG.ESPTracer then
-					local from = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y)
-					local to = Vector2.new(pos.X, pos.Y)
-					local delta = to - from
-					d.tracer.Size = UDim2.fromOffset(delta.Magnitude, 1)
-					d.tracer.Position = UDim2.fromOffset((from.X + to.X) / 2, (from.Y + to.Y) / 2)
-					d.tracer.Rotation = math.deg(math.atan2(delta.Y, delta.X))
-				end
-			end
-		end
-	end
-end
-
---=====================================================================
---  LOOP PRINCIPAL
---=====================================================================
-local function onRender(dt)
-	if updateESP then updateESP() end
-
-	if not enabled or (CONFIG.RequireADS and not holding) then
-		setHighlight(nil)
-		return
-	end
-	local char = LP.Character
-	local hum = char and char:FindFirstChildOfClass("Humanoid")
-	if not hum or hum.Health <= 0 then return end
-
-	local t = findTarget()
-	if not t then setHighlight(nil); return end
-
-	if CONFIG.ESPChams then setHighlight(t.char) else setHighlight(nil) end
-
-	local desired = CFrame.lookAt(Camera.CFrame.Position, predictedPos(t.part))
-	local alpha = CONFIG.Smoothness <= 0 and 1 or (1 - math.exp(-dt / CONFIG.Smoothness))
-	Camera.CFrame = Camera.CFrame:Lerp(desired, math.clamp(alpha, 0, 1))
-end
-
-RunService:BindToRenderStep("VeniceAimbot", Enum.RenderPriority.Camera.Value + 1, onRender)
-
---=====================================================================
---  INPUT
---=====================================================================
-UserInputService.InputBegan:Connect(function(input, gpe)
-	if gpe or capturing then return end
-	if input.UserInputType == CONFIG.AimInput then holding = true end
-
-	if input.KeyCode == CONFIG.ToggleKey then
-		enabled = not enabled
-		wm.Text = "VENICE  |  " .. (enabled and "ON" or "OFF")
-		wm.TextColor3 = enabled and Color3.new(1, 1, 1) or Color3.fromRGB(255, 90, 90)
-		if not enabled then setHighlight(nil) end
-	end
-
-	if input.KeyCode == CONFIG.SwitchKey then
-		aimPart = (aimPart == "Head") and "HumanoidRootPart" or "Head"
-	end
-
-	if input.KeyCode == CONFIG.PanelKey then
-		setPanelOpen(not panel.Visible)
-	end
-end)
-
-UserInputService.InputEnded:Connect(function(input)
-	if input.UserInputType == CONFIG.AimInput then holding = false end
-end)
-
-minBtn.MouseButton1Click:Connect(function() setPanelOpen(false) end)
-closeBtn.MouseButton1Click:Connect(function() setPanelOpen(false) end)
-openBtn.MouseButton1Click:Connect(function() setPanelOpen(true) end)
-
-Workspace:GetPropertyChangedSignal("CurrentCamera"):Connect(function()
-	if Workspace.CurrentCamera then Camera = Workspace.CurrentCamera end
-end)
-
--- Abrir la primera pestaña
-for _, p in pairs(pages) do p.Visible = false end
-pAim.Visible = true
-tabBar:GetChildren()[1].BackgroundColor3 = ACCENT
+	local focal = Camera.ViewportSize.Y / (2 * math.tan(math.rad(Camera
