@@ -1,31 +1,31 @@
 --=====================================================================
---  VENICE AIMBOT + ESP + PANEL  |  v3
---  Teclas: K = abrir/cerrar panel | E = aimbot ON/OFF
---          Q = cambiar parte     | Click derecho = apuntar
+--  VENICE  |  AIMBOT + ESP + PANEL  |  v4 (estable)
+--  K = panel | E = aimbot ON/OFF | Q = cambiar parte
+--  Click derecho = apuntar | Boton "AIM" en pantalla (movil)
 --=====================================================================
 
 local CONFIG = {
-	AimPart      = "Head",
-	FOV          = 120,
-	Smoothness   = 0.06,
-	RequireADS   = true,
-	TeamCheck    = true,
-	WallCheck    = true,
-	MaxDistance  = 600,
-	Prediction   = true,
-	BulletSpeed  = 400,
-	DrawFOV      = true,
-	ESP          = true,
-	ESPBox       = true,
-	ESPName      = true,
-	ESPDist      = true,
-	ESPHealth    = true,
-	ESPTracer    = false,
-	ESPChams     = true,
-	ToggleKey    = Enum.KeyCode.E,
-	SwitchKey    = Enum.KeyCode.Q,
-	PanelKey     = Enum.KeyCode.K,
-	AimInput     = Enum.UserInputType.MouseButton2,
+	AimPart     = "Head",
+	FOV         = 120,
+	Smoothness  = 0.25,
+	RequireADS  = true,
+	TeamCheck   = true,
+	WallCheck   = true,
+	MaxDistance = 600,
+	Prediction  = true,
+	BulletSpeed = 400,
+	DrawFOV     = true,
+	ESP         = true,
+	ESPBox      = true,
+	ESPName     = true,
+	ESPDist     = true,
+	ESPHealth   = true,
+	ESPTracer   = false,
+	ESPChams    = true,
+	ToggleKey   = Enum.KeyCode.E,
+	SwitchKey   = Enum.KeyCode.Q,
+	PanelKey    = Enum.KeyCode.K,
+	AimInput    = Enum.UserInputType.MouseButton2,
 }
 
 local Players          = game:GetService("Players")
@@ -41,28 +41,41 @@ local Camera    = Workspace.CurrentCamera
 --=====================================================================
 --  LIMPIEZA DE EJECUCIONES ANTERIORES
 --=====================================================================
-if type(_G.VeniceCleanup) == "function" then
-	pcall(_G.VeniceCleanup)
-end
-_G.VeniceCleanup = nil
+if type(_G.VeniceCleanup) == "function" then pcall(_G.VeniceCleanup) end
 
-local dead, connections = false, {}
-local function connect(signal, fn)
-	local c = signal:Connect(fn)
-	connections[#connections + 1] = c
+local CONN, espCache, gui = {}, {}, nil
+local RENDER_NAME = "VeniceRender_v4"
+local warned = false
+
+local function bind(sig, fn)
+	local c = sig:Connect(fn)
+	CONN[#CONN + 1] = c
 	return c
 end
 
-local ACCENT = Color3.fromRGB(157, 78, 221)
-local ACCENT2= Color3.fromRGB(120, 50, 190)
-local GOLD   = Color3.fromRGB(255, 205, 70)
-local BG     = Color3.fromRGB(13, 13, 18)
-local ROW    = Color3.fromRGB(25, 25, 32)
-local TXT    = Color3.fromRGB(232, 232, 240)
+local function cleanup()
+	for _, c in ipairs(CONN) do pcall(function() c:Disconnect() end) end
+	table.clear(CONN)
+	for _, data in pairs(espCache) do
+		for _, obj in pairs(data) do
+			if typeof(obj) == "Instance" then pcall(function() obj:Destroy() end) end
+		end
+	end
+	table.clear(espCache)
+	pcall(function() RunService:UnbindFromRenderStep(RENDER_NAME) end)
+	if gui then pcall(function() gui:Destroy() end) end
+end
+_G.VeniceCleanup = cleanup
 
-local enabled, holding, capturing = true, false, false
-local aimPart = CONFIG.AimPart
-local highlight, hlChar
+--=====================================================================
+--  UTILIDADES
+--=====================================================================
+local ACCENT  = Color3.fromRGB(157, 78, 221)
+local ACCENT2 = Color3.fromRGB(120, 50, 190)
+local GOLD    = Color3.fromRGB(255, 205, 70)
+local BG      = Color3.fromRGB(13, 13, 18)
+local ROW     = Color3.fromRGB(25, 25, 32)
+local TXT     = Color3.fromRGB(232, 232, 240)
 
 local function new(class, props)
 	local inst = Instance.new(class)
@@ -80,11 +93,43 @@ local function pad(obj, t, r, b, l)
 end
 
 --=====================================================================
+--  ESTADO
+--=====================================================================
+local state = {
+	enabled = true, aimPart = CONFIG.AimPart, fov = CONFIG.FOV, smoothness = CONFIG.Smoothness,
+	requireADS = CONFIG.RequireADS, teamCheck = CONFIG.TeamCheck, wallCheck = CONFIG.WallCheck,
+	maxDistance = CONFIG.MaxDistance, prediction = CONFIG.Prediction, bulletSpeed = CONFIG.BulletSpeed,
+	drawFOV = CONFIG.DrawFOV, esp = CONFIG.ESP, espBox = CONFIG.ESPBox, espName = CONFIG.ESPName,
+	espDist = CONFIG.ESPDist, espHealth = CONFIG.ESPHealth, espTracer = CONFIG.ESPTracer, espChams = CONFIG.ESPChams,
+}
+local holding, draggingPanel = false, false
+local S = {}   -- setters para el boton "Restablecer"
+
+--=====================================================================
 --  GUI BASE
 --=====================================================================
-local gui = new("ScreenGui", {
+gui = new("ScreenGui", {
 	Name = "VeniceAimbot", ResetOnSpawn = false, IgnoreGuiInset = true,
 	DisplayOrder = 9999, ZIndexBehavior = Enum.ZIndexBehavior.Sibling, Parent = PlayerGui,
+})
+
+local function notify(text, color)
+	local lbl = new("TextLabel", {
+		AnchorPoint = Vector2.new(0.5, 0), Position = UDim2.new(0.5, 0, 0, 60),
+		Size = UDim2.fromOffset(240, 26), BackgroundColor3 = BG, BackgroundTransparency = 0.15,
+		Font = Enum.Font.GothamBold, TextSize = 13, TextColor3 = color or GOLD, Text = text,
+		Parent = gui, ZIndex = 20,
+	})
+	corner(lbl, 6)
+	new("UIStroke", { Color = ACCENT, Transparency = 0.4, Parent = lbl })
+	TweenService:Create(lbl, TweenInfo.new(1.4), { BackgroundTransparency = 1, TextTransparency = 1 }):Play()
+	task.delay(1.5, function() pcall(function() lbl:Destroy() end) end)
+end
+
+local hud = new("TextLabel", {
+	Position = UDim2.new(0, 10, 0, 8), Size = UDim2.fromOffset(360, 16), BackgroundTransparency = 1,
+	Font = Enum.Font.GothamBold, TextSize = 12, TextColor3 = ACCENT,
+	TextXAlignment = Enum.TextXAlignment.Left, Text = "", Parent = gui, ZIndex = 4,
 })
 
 --=====================================================================
@@ -119,30 +164,30 @@ function UI.toggle(parent, text, default, callback)
 	})
 	local pill = new("Frame", {
 		AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, 0, 0.5, 0),
-		Size = UDim2.fromOffset(34, 18),
-		BackgroundColor3 = default and ACCENT or Color3.fromRGB(58, 58, 70), Parent = row,
+		Size = UDim2.fromOffset(34, 18), BackgroundColor3 = Color3.fromRGB(58, 58, 70), Parent = row,
 	})
 	corner(pill, 999)
 	local knob = new("Frame", {
-		AnchorPoint = Vector2.new(0.5, 0.5),
-		Position = default and UDim2.new(1, -9, 0.5, 0) or UDim2.new(0, 9, 0.5, 0),
+		AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(0, 9, 0.5, 0),
 		Size = UDim2.fromOffset(14, 14), BackgroundColor3 = Color3.new(1, 1, 1), Parent = pill,
 	})
 	corner(knob, 999)
 
-	local state = default
+	local value = default
 	local function render()
-		pill.BackgroundColor3 = state and ACCENT or Color3.fromRGB(58, 58, 70)
+		pill.BackgroundColor3 = value and ACCENT or Color3.fromRGB(58, 58, 70)
 		TweenService:Create(knob, TweenInfo.new(0.15), {
-			Position = state and UDim2.new(1, -9, 0.5, 0) or UDim2.new(0, 9, 0.5, 0),
+			Position = value and UDim2.new(1, -9, 0.5, 0) or UDim2.new(0, 9, 0.5, 0),
 		}):Play()
 	end
-	row.MouseButton1Down:Connect(function()
-		state = not state; render()
-		if callback then callback(state) end
-	end)
-	render()
-	return row
+	local function set(v)
+		value = v and true or false
+		render()
+		if callback then callback(value) end
+	end
+	row.MouseButton1Down:Connect(function() set(not value) end)
+	set(default)
+	return row, set
 end
 
 function UI.slider(parent, text, min, max, default, suffix, callback)
@@ -156,7 +201,7 @@ function UI.slider(parent, text, min, max, default, suffix, callback)
 	})
 	local val = new("TextLabel", {
 		Size = UDim2.new(0.4, 0, 0, 14), BackgroundTransparency = 1, Font = Enum.Font.GothamBold,
-		Text = tostring(default) .. (suffix or ""), TextSize = 12, TextColor3 = GOLD,
+		Text = "", TextSize = 12, TextColor3 = GOLD,
 		TextXAlignment = Enum.TextXAlignment.Right, Parent = holder,
 	})
 	local track = new("Frame", {
@@ -172,38 +217,230 @@ function UI.slider(parent, text, min, max, default, suffix, callback)
 	})
 	corner(knob, 999)
 
-	local value, dragging = default, false
-	local function set(v)
-		value = math.clamp(v, min, max)
-		local p = (value - min) / (max - min)
+	local dragging = false
+	local function set(v, silent)
+		v = math.clamp(v, min, max)
+		local p = (v - min) / (max - min)
 		fill.Size = UDim2.new(p, 0, 1, 0)
 		knob.Position = UDim2.new(p, 0, 0.5, 0)
-		val.Text = tostring(math.floor(value * 100) / 100) .. (suffix or "")
-		if callback then callback(value) end
+		val.Text = tostring(math.floor(v * 100) / 100) .. (suffix or "")
+		if not silent and callback then callback(v) end
 	end
-	set(default)
-	local function fromPos(x)
-		local rel = (x - track.AbsolutePosition.X) / math.max(track.AbsoluteSize.X, 1)
-		set(min + rel * (max - min))
-	end
+	set(default, true)
+	if callback then callback(default) end
+
 	holder.InputBegan:Connect(function(input)
 		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-			dragging = true; fromPos(input.Position.X)
+			dragging = true
+			local rel = (input.Position.X - track.AbsolutePosition.X) / math.max(track.AbsoluteSize.X, 1)
+			set(min + rel * (max - min))
 		end
 	end)
-	connect(UserInputService.InputChanged, function(input)
+	bind(UserInputService.InputChanged, function(input)
 		if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
-			fromPos(input.Position.X)
+			local rel = (input.Position.X - track.AbsolutePosition.X) / math.max(track.AbsoluteSize.X, 1)
+			set(min + rel * (max - min))
 		end
 	end)
-	connect(UserInputService.InputEnded, function(input)
+	bind(UserInputService.InputEnded, function(input)
 		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
 			dragging = false
 		end
 	end)
-	return holder
+	return holder, set
 end
 
 function UI.segment(parent, text, options, default, callback)
 	local holder = new("Frame", {
-		Size = UDim2.new(1, 0, 
+		Size = UDim2.new(1, 0, 0, 46), BackgroundColor3 = ROW, BackgroundTransparency = 0.15, Parent = parent,
+	})
+	corner(holder, 6); pad(holder, 6, 8, 6, 8)
+	new("TextLabel", {
+		Size = UDim2.new(1, 0, 0, 14), BackgroundTransparency = 1, Font = Enum.Font.Gotham,
+		Text = text, TextSize = 12, TextColor3 = TXT, TextXAlignment = Enum.TextXAlignment.Left, Parent = holder,
+	})
+	local row = new("Frame", {
+		Position = UDim2.new(0, 0, 0, 20), Size = UDim2.new(1, 0, 0, 20),
+		BackgroundTransparency = 1, Parent = holder,
+	})
+	new("UIListLayout", {
+		FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 5),
+		SortOrder = Enum.SortOrder.LayoutOrder, Parent = row,
+	})
+	local btns, current = {}, default
+	local function render()
+		for name, b in pairs(btns) do
+			b.BackgroundColor3 = (name == current) and ACCENT or Color3.fromRGB(45, 45, 56)
+		end
+	end
+	for _, name in ipairs(options) do
+		local b = new("TextButton", {
+			Size = UDim2.new(1 / #options, -4, 1, 0), BackgroundColor3 = Color3.fromRGB(45, 45, 56),
+			Text = name, Font = Enum.Font.GothamMedium, TextSize = 11, TextColor3 = TXT,
+			AutoButtonColor = false, Parent = row,
+		})
+		corner(b, 4)
+		btns[name] = b
+		b.MouseButton1Down:Connect(function()
+			current = name; render()
+			if callback then callback(name) end
+		end)
+	end
+	render()
+	return holder, function(v)
+		if btns[v] then
+			current = v; render()
+			if callback then callback(v) end
+		end
+	end
+end
+
+function UI.button(parent, text, callback)
+	local b = new("TextButton", {
+		Size = UDim2.new(1, 0, 0, 28), BackgroundColor3 = ACCENT2, Text = text,
+		Font = Enum.Font.GothamBold, TextSize = 12, TextColor3 = Color3.new(1, 1, 1),
+		AutoButtonColor = true, Parent = parent,
+	})
+	corner(b, 6)
+	b.MouseButton1Down:Connect(function() if callback then callback() end end)
+	return b
+end
+
+--=====================================================================
+--  PANEL
+--=====================================================================
+local panel = new("Frame", {
+	Name = "Panel", Size = UDim2.new(0, 252, 0, 440), Position = UDim2.new(0, 20, 0.5, -220),
+	BackgroundColor3 = BG, BackgroundTransparency = 0.05, BorderSizePixel = 0, Parent = gui, ZIndex = 5,
+})
+corner(panel, 10)
+new("UIStroke", { Color = ACCENT, Transparency = 0.5, Thickness = 1, Parent = panel })
+
+local header = new("Frame", {
+	Size = UDim2.new(1, 0, 0, 34), BackgroundColor3 = ACCENT2, BorderSizePixel = 0, Parent = panel, ZIndex = 6,
+})
+corner(header, 10)
+new("TextLabel", {
+	Position = UDim2.new(0, 12, 0, 0), Size = UDim2.new(1, -70, 1, 0), BackgroundTransparency = 1,
+	Font = Enum.Font.GothamBold, Text = "VENICE  v4", TextSize = 13, TextColor3 = Color3.new(1, 1, 1),
+	TextXAlignment = Enum.TextXAlignment.Left, Parent = header, ZIndex = 7,
+})
+local minBtn = new("TextButton", {
+	AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -32, 0.5, 0), Size = UDim2.fromOffset(24, 22),
+	BackgroundColor3 = ACCENT, Text = "—", Font = Enum.Font.GothamBold, TextSize = 13,
+	TextColor3 = Color3.new(1, 1, 1), AutoButtonColor = true, Parent = header, ZIndex = 7,
+})
+corner(minBtn, 5)
+local closeBtn = new("TextButton", {
+	AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -6, 0.5, 0), Size = UDim2.fromOffset(24, 22),
+	BackgroundColor3 = ACCENT, Text = "✕", Font = Enum.Font.GothamBold, TextSize = 12,
+	TextColor3 = Color3.new(1, 1, 1), AutoButtonColor = true, Parent = header, ZIndex = 7,
+})
+corner(closeBtn, 5)
+
+local body = new("ScrollingFrame", {
+	Size = UDim2.new(1, 0, 1, -34), Position = UDim2.new(0, 0, 0, 34), BackgroundTransparency = 1,
+	BorderSizePixel = 0, ScrollBarThickness = 3, ScrollBarImageColor3 = ACCENT,
+	CanvasSize = UDim2.new(0, 0, 0, 0), AutomaticCanvasSize = Enum.AutomaticSize.Y, Parent = panel, ZIndex = 6,
+})
+new("UIListLayout", { Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder, Parent = body })
+pad(body, 8, 10, 8, 10)
+
+-- Arrastrar
+local dragStart, startPos
+header.InputBegan:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+		draggingPanel = true; dragStart = input.Position; startPos = panel.Position
+	end
+end)
+bind(UserInputService.InputChanged, function(input)
+	if draggingPanel and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+		local d = input.Position - dragStart
+		panel.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X, startPos.Y.Scale, startPos.Y.Offset + d.Y)
+	end
+end)
+bind(UserInputService.InputEnded, function(input)
+	if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+		draggingPanel = false
+	end
+end)
+
+minBtn.MouseButton1Down:Connect(function()
+	body.Visible = not body.Visible
+	panel.Size = body.Visible and UDim2.new(0, 252, 0, 440) or UDim2.new(0, 252, 0, 34)
+end)
+closeBtn.MouseButton1Down:Connect(function() panel.Visible = false end)
+
+--====================  SECCION AIMBOT  ====================
+local sAim = UI.section(body, "Aimbot")
+S.aimbot = select(2, UI.toggle(sAim, "Aimbot activo", state.enabled, function(v) state.enabled = v end))
+S.part   = select(2, UI.segment(sAim, "Parte objetivo", { "Head", "Torso", "Nearest" }, state.aimPart, function(v) state.aimPart = v end))
+S.fov    = select(2, UI.slider(sAim, "FOV", 10, 360, state.fov, "°", function(v) state.fov = v end))
+S.smooth = select(2, UI.slider(sAim, "Suavizado", 0.02, 1, state.smoothness, "", function(v) state.smoothness = v end))
+S.maxdist= select(2, UI.slider(sAim, "Distancia max", 50, 1000, state.maxDistance, "m", function(v) state.maxDistance = v end))
+S.speed  = select(2, UI.slider(sAim, "Velocidad bala", 100, 2000, state.bulletSpeed, "", function(v) state.bulletSpeed = v end))
+S.ads    = select(2, UI.toggle(sAim, "Solo al apuntar", state.requireADS, function(v) state.requireADS = v end))
+S.team   = select(2, UI.toggle(sAim, "Chequeo de equipo", state.teamCheck, function(v) state.teamCheck = v end))
+S.wall   = select(2, UI.toggle(sAim, "Chequeo de pared", state.wallCheck, function(v) state.wallCheck = v end))
+S.pred   = select(2, UI.toggle(sAim, "Prediccion", state.prediction, function(v) state.prediction = v end))
+S.circle = select(2, UI.toggle(sAim, "Dibujar circulo FOV", state.drawFOV, function(v) state.drawFOV = v end))
+
+--====================  SECCION ESP  ====================
+local sEsp = UI.section(body, "ESP")
+S.esp    = select(2, UI.toggle(sEsp, "ESP activo", state.esp, function(v)
+	state.esp = v
+	if not v then
+		for plr in pairs(espCache) do
+			local data = espCache[plr]
+			if data then
+				for _, obj in pairs(data) do
+					if typeof(obj) == "Instance" then pcall(function() obj:Destroy() end) end
+				end
+			end
+			espCache[plr] = nil
+		end
+	end
+end))
+S.box    = select(2, UI.toggle(sEsp, "Caja", state.espBox, function(v) state.espBox = v end))
+S.ename  = select(2, UI.toggle(sEsp, "Nombre", state.espName, function(v) state.espName = v end))
+S.edist  = select(2, UI.toggle(sEsp, "Distancia", state.espDist, function(v) state.espDist = v end))
+S.ehealth= select(2, UI.toggle(sEsp, "Vida", state.espHealth, function(v) state.espHealth = v end))
+S.etracer= select(2, UI.toggle(sEsp, "Tracer", state.espTracer, function(v) state.espTracer = v end))
+S.echams = select(2, UI.toggle(sEsp, "Chams (Highlight)", state.espChams, function(v) state.espChams = v end))
+
+--====================  SECCION AJUSTES  ====================
+local sSet = UI.section(body, "Ajustes")
+UI.button(sSet, "RESTABLECER", function()
+	S.aimbot(true); S.part(CONFIG.AimPart); S.fov(CONFIG.FOV); S.smooth(CONFIG.Smoothness)
+	S.maxdist(CONFIG.MaxDistance); S.speed(CONFIG.BulletSpeed); S.ads(CONFIG.RequireADS)
+	S.team(CONFIG.TeamCheck); S.wall(CONFIG.WallCheck); S.pred(CONFIG.Prediction); S.circle(CONFIG.DrawFOV)
+	S.esp(CONFIG.ESP); S.box(CONFIG.ESPBox); S.ename(CONFIG.ESPName); S.edist(CONFIG.ESPDist)
+	S.ehealth(CONFIG.ESPHealth); S.etracer(CONFIG.ESPTracer); S.echams(CONFIG.ESPChams)
+	notify("Config restablecida")
+end)
+new("TextLabel", {
+	Size = UDim2.new(1, 0, 0, 46), BackgroundTransparency = 1, Font = Enum.Font.Gotham,
+	Text = "K = panel  |  E = aimbot\nQ = parte  |  Click der = apuntar",
+	TextSize = 11, TextColor3 = Color3.fromRGB(170, 170, 185),
+	TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Top, Parent = sSet,
+})
+
+--=====================================================================
+--  CIRCULO FOV
+--=====================================================================
+local fovCircle = new("Frame", {
+	AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.new(0.5, 0, 0.5, 0),
+	BackgroundTransparency = 1, Parent = gui, ZIndex = 2,
+})
+corner(fovCircle, 999)
+new("UIStroke", { Color = ACCENT, Thickness = 1.5, Transparency = 0.35, Parent = fovCircle })
+
+local function fovRadius()
+	local vp = Camera.ViewportSize
+	local camFov = math.rad(Camera.FieldOfView > 0 and Camera.FieldOfView or 70)
+	return (math.tan(math.rad(state.fov) / 2) / math.tan(camFov / 2)) * (vp.Y / 2)
+end
+
+local function updateFovCircle()
+	local r = math.clamp(fovRadius(), 4, 4000)
+	fovCircle.Size
